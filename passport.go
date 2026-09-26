@@ -369,6 +369,8 @@ func (c *Client) PassportGetInfo(ctx context.Context) (*PassportInfoResponse, er
 // Challenges are per-request: every refusal issues a fresh RequestID
 // (browser-verifying one request does not clear later ones), so always
 // use the newest ChallengeURL, solve it, then retry the login.
+// Live-verified: solving the returned anticapt URL in a browser unblocks
+// the very next PassportLogin from the same network.
 type LoginChallengeError struct {
 	Errno        int    // server errno (460030 when explicit)
 	Code         int    // server code field
