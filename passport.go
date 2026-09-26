@@ -3,8 +3,10 @@ package terabox
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 )
 
 // PreLoginResponse is the /passport/prelogin result.
@@ -56,6 +58,10 @@ type PassportResponse struct {
 	LogID int64           `json:"logid"`
 	Msg   string          `json:"msg"`
 	Data  json.RawMessage `json:"data"`
+	// Errno/ErrMsg appear on risk-control responses (e.g. errno 460030
+	// "dragdrop") which use a different field convention.
+	Errno  int    `json:"errno"`
+	ErrMsg string `json:"errmsg"`
 	// Token is the registration token returned by RegisterSendCode at the
 	// top level (it is NOT nested under data).
 	Token       string `json:"token"`
@@ -136,6 +142,10 @@ func (c *Client) PassportPreLogin(ctx context.Context, email string) (*PreLoginR
 
 // PassportLogin completes the password login flow. On success resp.NDUS
 // contains the ndus token; create a new client with it.
+//
+// When TeraBox risk control refuses the login (errno 460030 "dragdrop",
+// or a silent code=0 with null data), it returns a *LoginChallengeError;
+// its ChallengeURL can be shown to the user for manual captcha solving.
 func (c *Client) PassportLogin(ctx context.Context, pre *PreLoginResponse, email, password string) (*PassportResponse, error) {
 	const op = "passportLogin"
 	if c.dataSnapshot().pubKey == "" {
@@ -177,6 +187,9 @@ func (c *Client) PassportLogin(ctx context.Context, pre *PreLoginResponse, email
 	if err != nil {
 		return nil, err
 	}
+	if chErr := c.maybeChallenge(&resp, true); chErr != nil {
+		return nil, chErr
+	}
 	if resp.Code == 0 {
 		resp.NDUS = ndus
 	}
@@ -208,6 +221,9 @@ func (c *Client) RegisterSendCode(ctx context.Context, email string) (*PassportR
 	if err != nil {
 		return nil, err
 	}
+	if chErr := c.maybeChallenge(&resp, false); chErr != nil {
+		return nil, chErr
+	}
 	return &resp, nil
 }
 
@@ -229,6 +245,9 @@ func (c *Client) RegisterVerify(ctx context.Context, regToken, code string) (*Pa
 	}, &resp)
 	if err != nil {
 		return nil, err
+	}
+	if chErr := c.maybeChallenge(&resp, false); chErr != nil {
+		return nil, chErr
 	}
 	return &resp, nil
 }
@@ -280,6 +299,9 @@ func (c *Client) RegisterFinish(ctx context.Context, regToken, password string) 
 	if err != nil {
 		return nil, err
 	}
+	if chErr := c.maybeChallenge(&resp, false); chErr != nil {
+		return nil, chErr
+	}
 	if resp.Code == 0 {
 		resp.NDUS = ndus
 	}
@@ -329,4 +351,55 @@ func (c *Client) PassportGetInfo(ctx context.Context) (*PassportInfoResponse, er
 		c.updateParams(func(p *accountParams) { p.accountName = name })
 	}
 	return &resp, nil
+}
+
+// LoginChallengeError is returned when TeraBox risk control refuses a
+// passport call: either explicitly (errno 460030, errmsg "dragdrop") or
+// silently (login answered code=0 with null data). ChallengeURL points to
+// TeraBox's h5 captcha page — a human can open it in a browser on the
+// same network, solve the drag captcha, and then retry the login.
+// Whether solving lifts the API block depends on TeraBox's trust binding
+// (IP-based is the likely design); it is surfaced for the user to try.
+type LoginChallengeError struct {
+	Errno        int    // server errno (460030 when explicit)
+	Code         int    // server code field
+	ErrMsg       string // server errmsg/msg
+	ChallengeURL string // captcha page for manual solving
+}
+
+func (e *LoginChallengeError) Error() string {
+	return fmt.Sprintf("terabox: passport call blocked by risk control (errno=%d code=%d msg=%q); solve the captcha manually: %s",
+		e.Errno, e.Code, e.ErrMsg, e.ChallengeURL)
+}
+
+func isNullJSON(d json.RawMessage) bool {
+	s := strings.TrimSpace(string(d))
+	return s == "" || s == "null"
+}
+
+// maybeChallenge converts a passport risk-control response into a
+// *LoginChallengeError, or nil when the response is not a refusal.
+// nullDataMeansChallenge: for /passport/login a code=0 response with null
+// data is a silent refusal; for the register endpoints code=0+null data
+// is a legitimate success shape (the token is top-level).
+func (c *Client) maybeChallenge(resp *PassportResponse, nullDataMeansChallenge bool) error {
+	explicit := resp.Errno == 460030 || strings.EqualFold(resp.ErrMsg, "dragdrop")
+	silent := nullDataMeansChallenge && resp.Code == 0 && isNullJSON(resp.Data)
+	if !explicit && !silent {
+		return nil
+	}
+	msg := resp.ErrMsg
+	if msg == "" {
+		msg = resp.Msg
+	}
+	if msg == "" && silent {
+		msg = "login refused (code=0 with null data; risk control)"
+	}
+	webHost, _, _ := c.snapshot()
+	return &LoginChallengeError{
+		Errno:        resp.Errno,
+		Code:         resp.Code,
+		ErrMsg:       msg,
+		ChallengeURL: webHost + "/wap/outlogin/loginprotect",
+	}
 }
