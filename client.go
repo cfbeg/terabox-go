@@ -294,19 +294,46 @@ func (c *Client) logError(msg string, args ...any) {
 	}
 }
 
+// cancelOnCloseBody cancels the per-request timeout context when the
+// response body is closed. It must NOT be canceled at Do() return:
+// http.Client.Do returns as soon as the response headers arrive, so
+// canceling there would make every subsequent body Read fail with
+// "context canceled".
+type cancelOnCloseBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (b cancelOnCloseBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.cancel()
+	return err
+}
+
 // doHTTP executes a request, applying the given timeout unless the caller's
-// context already carries a deadline (caller deadline wins).
+// context already carries a deadline (caller deadline wins). The timeout
+// covers the whole exchange, including reading the body: the internal
+// timeout context lives until the body is closed.
 func (c *Client) doHTTP(req *http.Request, timeout time.Duration) (*http.Response, error) {
 	ctx := req.Context()
+	var cancel context.CancelFunc
 	if timeout > 0 {
 		if _, ok := ctx.Deadline(); !ok {
-			var cancel context.CancelFunc
 			ctx, cancel = context.WithTimeout(ctx, timeout)
-			defer cancel()
 			req = req.WithContext(ctx)
 		}
 	}
-	return c.httpClient.Do(req)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		if cancel != nil {
+			cancel()
+		}
+		return nil, err
+	}
+	if cancel != nil {
+		resp.Body = cancelOnCloseBody{resp.Body, cancel}
+	}
+	return resp, nil
 }
 
 // backoffSleep waits between retry attempts (500ms, 1s, 2s, 4s, ...),

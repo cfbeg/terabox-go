@@ -25,6 +25,11 @@ type PassportResponse struct {
 	LogID int64           `json:"logid"`
 	Msg   string          `json:"msg"`
 	Data  json.RawMessage `json:"data"`
+	// Token is the registration token returned by RegisterSendCode at the
+	// top level (it is NOT nested under data).
+	Token       string `json:"token"`
+	RetryPeriod int    `json:"retry_period"`
+	CanSkipCode int    `json:"can_skip_code"`
 	// NDUS is extracted from the Set-Cookie header on successful
 	// PassportLogin / RegisterFinish calls.
 	NDUS string `json:"-"`
@@ -147,7 +152,8 @@ func (c *Client) PassportLogin(ctx context.Context, pre *PreLoginResponse, email
 
 // RegisterSendCode sends a registration verification code to the email.
 // Code semantics: 0 OK, 10 invalid email, 11 already registered,
-// 60 too fast (wait ~60s).
+// 60 too fast (wait ~60s). On success the registration token is in
+// resp.Token; pass it to RegisterVerify / RegisterFinish.
 func (c *Client) RegisterSendCode(ctx context.Context, email string) (*PassportResponse, error) {
 	const op = "regSendCode"
 	if c.dataSnapshot().pcfToken == "" {
@@ -173,7 +179,7 @@ func (c *Client) RegisterSendCode(ctx context.Context, email string) (*PassportR
 }
 
 // RegisterVerify verifies the registration code sent by email.
-// Code semantics: 0 OK, 59 wrong email code.
+// Code semantics: 0 OK, 58/59 wrong email code (58 observed live).
 func (c *Client) RegisterVerify(ctx context.Context, regToken, code string) (*PassportResponse, error) {
 	const op = "regVerify"
 
