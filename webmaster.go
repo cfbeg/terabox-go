@@ -25,6 +25,9 @@ type OperatePlanResponse struct {
 // plan_id=201, opt_type=1. The jsToken/bdstoken pair is fetched via
 // UpdateAppData when missing; uk defaults to the current account ID
 // (0 when not yet known, matching the observed request).
+//
+// Verified live: the first join returns errno=0; calling it again on an
+// already-joined account returns errno=22003 (msg/data empty).
 func (c *Client) WebmasterOperatePlan(ctx context.Context, planID, optType int) (*OperatePlanResponse, error) {
 	const op = "webmasterOperatePlan"
 
