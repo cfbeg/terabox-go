@@ -289,6 +289,10 @@ func (c *Client) RenameFiles(ctx context.Context, items []FMRename) (*FileManage
 }
 
 // GetFileMeta retrieves metadata (including download links) for remote files.
+//
+// Note (verified 2026-09): the dlink=1/origin=dlna path is currently
+// failing server-side for all target variants (errno=12 with per-file
+// errno 2 in info). Use Download to obtain download links instead.
 func (c *Client) GetFileMeta(ctx context.Context, targets []FileMetaTarget) (*FileMetaResponse, error) {
 	const op = "getFileMeta"
 

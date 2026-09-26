@@ -183,21 +183,47 @@ type UploadData struct {
 // PrecreateResponse is the /api/precreate result.
 type PrecreateResponse struct {
 	Errno      int         `json:"errno"`
-	UploadID   string      `json:"upload_id"`
+	UploadID   string      `json:"uploadid"` // server sends "uploadid" (no underscore)
 	ReturnType int         `json:"return_type"`
 	BlockSize  int64       `json:"block_size"`
 	RequestID  json.Number `json:"request_id"`
 }
 
-// RapidUploadResponse is the /api/rapidupload result.
+// RapidUploadResponse is the /api/rapidupload result. The server nests
+// the file metadata under "info"; it is flattened here, preserving the
+// flat public fields of the original definition.
 type RapidUploadResponse struct {
-	Errno int    `json:"errno"`
-	FSID  int64  `json:"fs_id"`
-	Path  string `json:"path"`
-	MD5   string `json:"md5"`
-	Size  int64  `json:"size"`
-	CTime int64  `json:"ctime"`
-	MTime int64  `json:"mtime"`
+	Errno     int         `json:"errno"`
+	RequestID json.Number `json:"request_id"`
+	FSID      int64       `json:"-"`
+	Path      string      `json:"-"`
+	MD5       string      `json:"-"`
+	Size      int64       `json:"-"`
+	CTime     int64       `json:"-"`
+	MTime     int64       `json:"-"`
+}
+
+// UnmarshalJSON flattens the nested "info" object returned by the server.
+func (r *RapidUploadResponse) UnmarshalJSON(b []byte) error {
+	var wire struct {
+		Errno     int         `json:"errno"`
+		RequestID json.Number `json:"request_id"`
+		Info      struct {
+			MD5   string `json:"md5"`
+			FSID  int64  `json:"fs_id"`
+			Path  string `json:"path"`
+			Size  int64  `json:"size"`
+			CTime int64  `json:"ctime"`
+			MTime int64  `json:"mtime"`
+		} `json:"info"`
+	}
+	if err := json.Unmarshal(b, &wire); err != nil {
+		return err
+	}
+	r.Errno, r.RequestID = wire.Errno, wire.RequestID
+	r.FSID, r.Path, r.MD5 = wire.Info.FSID, wire.Info.Path, wire.Info.MD5
+	r.Size, r.CTime, r.MTime = wire.Info.Size, wire.Info.CTime, wire.Info.MTime
+	return nil
 }
 
 // LocateUploadResponse is the locateupload result.

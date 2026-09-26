@@ -3,8 +3,32 @@ package terabox
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 )
+
+// Int64ish is an int64 that accepts either a JSON number or a JSON string
+// (the server is inconsistent: e.g. /api/download returns dlink[].fs_id
+// as a string while listings return numbers).
+type Int64ish int64
+
+// UnmarshalJSON accepts a JSON number or numeric string.
+func (v *Int64ish) UnmarshalJSON(b []byte) error {
+	s := strings.TrimSpace(string(b))
+	if s == "" || s == "null" {
+		return nil
+	}
+	s = strings.Trim(s, `"`)
+	if s == "" {
+		return nil
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return err
+	}
+	*v = Int64ish(n)
+	return nil
+}
 
 // Error describes a failed TeraBox API call.
 type Error struct {

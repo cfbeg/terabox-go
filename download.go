@@ -21,17 +21,21 @@ type HomeInfoResponse struct {
 
 // DLinkEntry is one entry of the /api/download result.
 type DLinkEntry struct {
-	FSID           int64  `json:"fs_id"`
-	DLink          string `json:"dlink"`
-	ServerFilename string `json:"server_filename"`
-	Size           int64  `json:"size"`
-	IsDir          int    `json:"isdir"`
+	FSID           Int64ish `json:"fs_id"` // the server sends this as a JSON string
+	DLink          string   `json:"dlink"`
+	ServerFilename string   `json:"server_filename"`
+	Size           int64    `json:"size"`
+	IsDir          int      `json:"isdir"`
 }
 
 // DownloadResponse is the /api/download result.
 type DownloadResponse struct {
-	Errno int          `json:"errno"`
-	DLink []DLinkEntry `json:"dlink"`
+	Errno    int          `json:"errno"`
+	DLink    []DLinkEntry `json:"dlink"`
+	FileInfo struct {
+		Size     int64  `json:"size"`
+		Filename string `json:"filename"`
+	} `json:"file_info"`
 }
 
 // GetHomeInfo retrieves the home page info; on success Data.SignB is
@@ -54,6 +58,10 @@ func (c *Client) GetHomeInfo(ctx context.Context) (*HomeInfoResponse, error) {
 }
 
 // Download requests download links for the given file IDs.
+//
+// The returned dlink is not anonymous: a bare GET without the session
+// headers is answered with HTTP 403 (error_code=31). Fetch it with the
+// client's Cookie (cli.CookieValue("ndus")) and User-Agent attached.
 func (c *Client) Download(ctx context.Context, fsIDs []int64) (*DownloadResponse, error) {
 	const op = "download"
 

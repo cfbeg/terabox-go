@@ -133,6 +133,25 @@ func WithUploadHost(host string) Option {
 	return func(c *Client) { c.uhost = host }
 }
 
+// WithCookies restores a previously saved cookie string (see CookieString),
+// resuming a session across process restarts — including the browserid /
+// pcftoken state a captcha challenge was issued under, which must be kept
+// between the challenge and the post-solve retry. A bare ndus value is
+// also accepted.
+func WithCookies(serialized string) Option {
+	return func(c *Client) {
+		for _, kv := range strings.Split(serialized, ";") {
+			kv = strings.TrimSpace(kv)
+			if kv == "" {
+				continue
+			}
+			if name, value, ok := strings.Cut(kv, "="); ok {
+				c.cookies[name] = value
+			}
+		}
+	}
+}
+
 // NewClient creates a TeraBox client authenticated with an ndus cookie
 // (copy it from a browser session, or obtain one via PassportLogin or
 // RegisterFinish). An empty ndus creates an unauthenticated client,
