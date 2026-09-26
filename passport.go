@@ -8,14 +8,45 @@ import (
 )
 
 // PreLoginResponse is the /passport/prelogin result.
+// Older responses carried seval/random/timestamp at the top level; the
+// live server nests them under data (and random can be a JSON number),
+// so both layouts are decoded and resolved by the accessor methods.
 type PreLoginResponse struct {
-	Code      int             `json:"code"`
-	LogID     int64           `json:"logid"`
-	Msg       string          `json:"msg"`
-	Seval     string          `json:"seval"`
-	Random    string          `json:"random"`
-	Timestamp int64           `json:"timestamp"`
-	Data      json.RawMessage `json:"data,omitempty"`
+	Code      int    `json:"code"`
+	LogID     int64  `json:"logid"`
+	Msg       string `json:"msg"`
+	Seval     string `json:"seval"`
+	Random    string `json:"random"`
+	Timestamp int64  `json:"timestamp"`
+	Data      struct {
+		Seval     string      `json:"seval"`
+		Random    json.Number `json:"random"`
+		Timestamp int64       `json:"timestamp"`
+	} `json:"data"`
+}
+
+// SevalVal resolves the seval, preferring the observed nested layout.
+func (p *PreLoginResponse) SevalVal() string {
+	if p.Data.Seval != "" {
+		return p.Data.Seval
+	}
+	return p.Seval
+}
+
+// RandomVal resolves the random value as a string.
+func (p *PreLoginResponse) RandomVal() string {
+	if p.Data.Random != "" {
+		return p.Data.Random.String()
+	}
+	return p.Random
+}
+
+// TimestampVal resolves the timestamp.
+func (p *PreLoginResponse) TimestampVal() int64 {
+	if p.Data.Timestamp != 0 {
+		return p.Data.Timestamp
+	}
+	return p.Timestamp
 }
 
 // PassportResponse is a generic passport response (login, register steps).
@@ -120,15 +151,17 @@ func (c *Client) PassportLogin(ctx context.Context, pre *PreLoginResponse, email
 	}
 	encpwd = ToURLSafeBase64(encpwd)
 
-	prand := PRandGen("web", pre.Seval, encpwd, email, browserid, pre.Random)
+	seval := pre.SevalVal()
+	random := pre.RandomVal()
+	prand := PRandGen("web", seval, encpwd, email, browserid, random)
 
 	form := c.passportForm()
 	form.Append("prand", prand)
 	form.Append("email", email)
 	form.Append("pwd", encpwd)
-	form.Append("seval", pre.Seval)
-	form.Append("random", pre.Random)
-	form.Append("timestamp", strconv.FormatInt(pre.Timestamp, 10))
+	form.Append("seval", seval)
+	form.Append("random", random)
+	form.Append("timestamp", strconv.FormatInt(pre.TimestampVal(), 10))
 
 	var resp PassportResponse
 	var ndus string
