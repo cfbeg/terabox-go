@@ -62,6 +62,12 @@ type PassportResponse struct {
 	// "dragdrop") which use a different field convention.
 	Errno  int    `json:"errno"`
 	ErrMsg string `json:"errmsg"`
+	// RequestID/RequestIDString accompany risk-control responses; the
+	// string variant preserves full precision (the numeric request_id
+	// loses bits past float64 in JSON tooling). It identifies the
+	// challenge on the anticapt page.
+	RequestID       json.Number `json:"request_id"`
+	RequestIDString string      `json:"request_id_string"`
 	// Token is the registration token returned by RegisterSendCode at the
 	// top level (it is NOT nested under data).
 	Token       string `json:"token"`
@@ -355,15 +361,19 @@ func (c *Client) PassportGetInfo(ctx context.Context) (*PassportInfoResponse, er
 
 // LoginChallengeError is returned when TeraBox risk control refuses a
 // passport call: either explicitly (errno 460030, errmsg "dragdrop") or
-// silently (login answered code=0 with null data). ChallengeURL points to
-// TeraBox's h5 captcha page — a human can open it in a browser on the
-// same network, solve the drag captcha, and then retry the login.
-// Whether solving lifts the API block depends on TeraBox's trust binding
-// (IP-based is the likely design); it is surfaced for the user to try.
+// silently (login answered code=0 with null data). ChallengeURL is the
+// captcha page a human opens in a browser on the same network: with a
+// request id it is the anticapt page tied to the refused request,
+// otherwise the loginprotect fallback page.
+//
+// Challenges are per-request: every refusal issues a fresh RequestID
+// (browser-verifying one request does not clear later ones), so always
+// use the newest ChallengeURL, solve it, then retry the login.
 type LoginChallengeError struct {
 	Errno        int    // server errno (460030 when explicit)
 	Code         int    // server code field
 	ErrMsg       string // server errmsg/msg
+	RequestID    string // request id identifying the challenge, if any
 	ChallengeURL string // captcha page for manual solving
 }
 
@@ -375,6 +385,23 @@ func (e *LoginChallengeError) Error() string {
 func isNullJSON(d json.RawMessage) bool {
 	s := strings.TrimSpace(string(d))
 	return s == "" || s == "null"
+}
+
+// challengeURL builds the captcha page URL for manual solving. With a
+// request id it is the anticapt page tied to the refused request
+// (observed browser flow: anticapt → /captcha/getslide →
+// /captcha/checkslide); otherwise it falls back to loginprotect.
+func (c *Client) challengeURL(resp *PassportResponse) string {
+	webHost, _, _ := c.snapshot()
+	id := resp.RequestIDString
+	if id == "" && resp.RequestID != "" {
+		id = resp.RequestID.String()
+	}
+	if id != "" {
+		return webHost + "/anticapt?type=dragdrop&requestId=" + id +
+			"&lang=" + c.lang + "&platform=web"
+	}
+	return webHost + "/wap/outlogin/loginprotect"
 }
 
 // maybeChallenge converts a passport risk-control response into a
@@ -395,11 +422,15 @@ func (c *Client) maybeChallenge(resp *PassportResponse, nullDataMeansChallenge b
 	if msg == "" && silent {
 		msg = "login refused (code=0 with null data; risk control)"
 	}
-	webHost, _, _ := c.snapshot()
+	id := resp.RequestIDString
+	if id == "" && resp.RequestID != "" {
+		id = resp.RequestID.String()
+	}
 	return &LoginChallengeError{
 		Errno:        resp.Errno,
 		Code:         resp.Code,
 		ErrMsg:       msg,
-		ChallengeURL: webHost + "/wap/outlogin/loginprotect",
+		RequestID:    id,
+		ChallengeURL: c.challengeURL(resp),
 	}
 }
