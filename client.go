@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -71,12 +72,14 @@ type Client struct {
 	lang      string
 	userAgent string
 
-	mu      sync.RWMutex
-	cookies map[string]string
-	whost   string
-	uhost   string
-	data    appData
-	params  accountParams
+	mu             sync.RWMutex
+	fileDiffMu     sync.Mutex
+	cookies        map[string]string
+	trustedOrigins map[string]struct{}
+	whost          string
+	uhost          string
+	data           appData
+	params         accountParams
 }
 
 // Option configures a Client.
@@ -97,9 +100,19 @@ func WithUploadTimeout(d time.Duration) Option {
 }
 
 // WithHTTPClient supplies a custom *http.Client (e.g. with a proxy
-// transport). Redirects are always handled manually by this package.
+// transport). Its configuration is copied, except redirects and cookies are
+// managed by this package. A nil client leaves the default in place.
 func WithHTTPClient(h *http.Client) Option {
-	return func(c *Client) { c.httpClient = h }
+	return func(c *Client) {
+		if h != nil {
+			clone := *h
+			clone.Jar = nil
+			clone.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			}
+			c.httpClient = &clone
+		}
+	}
 }
 
 // WithLogger wires log messages (hostname changes, retries) to the
@@ -136,8 +149,8 @@ func WithUploadHost(host string) Option {
 // WithCookies restores a previously saved cookie string (see CookieString),
 // resuming a session across process restarts — including the browserid /
 // pcftoken state a captcha challenge was issued under, which must be kept
-// between the challenge and the post-solve retry. A bare ndus value is
-// also accepted.
+// between the challenge and the post-solve retry. Pass a bare ndus value
+// as the first argument to NewClient instead.
 func WithCookies(serialized string) Option {
 	return func(c *Client) {
 		for _, kv := range strings.Split(serialized, ";") {
@@ -181,6 +194,12 @@ func NewClient(ndus string, opts ...Option) *Client {
 	}
 	for _, opt := range opts {
 		opt(c)
+	}
+	c.trustedOrigins = make(map[string]struct{})
+	for _, host := range []string{c.whost, c.uhost} {
+		if u, err := url.Parse(host); err == nil && u.Host != "" {
+			c.trustedOrigins[urlOrigin(u)] = struct{}{}
+		}
 	}
 	return c
 }
@@ -243,11 +262,15 @@ func (c *Client) snapshot() (webHost, uploadHost, cookieHeader string) {
 }
 
 func (c *Client) cookieHeaderLocked() string {
-	if len(c.cookies) == 0 {
+	return serializeCookies(c.cookies)
+}
+
+func serializeCookies(cookies map[string]string) string {
+	if len(cookies) == 0 {
 		return ""
 	}
-	names := make([]string, 0, len(c.cookies))
-	for n := range c.cookies {
+	names := make([]string, 0, len(cookies))
+	for n := range cookies {
 		names = append(names, n)
 	}
 	sort.Strings(names)
@@ -258,7 +281,7 @@ func (c *Client) cookieHeaderLocked() string {
 		}
 		b.WriteString(n)
 		b.WriteByte('=')
-		b.WriteString(c.cookies[n])
+		b.WriteString(cookies[n])
 	}
 	return b.String()
 }
@@ -273,13 +296,17 @@ func (c *Client) mergeCookies(cs []*http.Cookie) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	mergeCookieValues(c.cookies, cs)
+}
+
+func mergeCookieValues(cookies map[string]string, cs []*http.Cookie) {
 	now := time.Now()
 	for _, ck := range cs {
 		if ck.MaxAge < 0 || (!ck.Expires.IsZero() && ck.Expires.Before(now)) {
-			delete(c.cookies, ck.Name)
+			delete(cookies, ck.Name)
 			continue
 		}
-		c.cookies[ck.Name] = ck.Value
+		cookies[ck.Name] = ck.Value
 	}
 }
 
@@ -329,18 +356,19 @@ func (b cancelOnCloseBody) Close() error {
 	return err
 }
 
-// doHTTP executes a request, applying the given timeout unless the caller's
-// context already carries a deadline (caller deadline wins). The timeout
+// doHTTP executes a request, using the earlier of the caller's deadline
+// and the given per-request timeout. The timeout
 // covers the whole exchange, including reading the body: the internal
 // timeout context lives until the body is closed.
 func (c *Client) doHTTP(req *http.Request, timeout time.Duration) (*http.Response, error) {
+	if err := c.validateEndpoint(req.URL); err != nil {
+		return nil, err
+	}
 	ctx := req.Context()
 	var cancel context.CancelFunc
 	if timeout > 0 {
-		if _, ok := ctx.Deadline(); !ok {
-			ctx, cancel = context.WithTimeout(ctx, timeout)
-			req = req.WithContext(ctx)
-		}
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		req = req.WithContext(ctx)
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -355,15 +383,42 @@ func (c *Client) doHTTP(req *http.Request, timeout time.Duration) (*http.Respons
 	return resp, nil
 }
 
-// backoffSleep waits between retry attempts (500ms, 1s, 2s, 4s, ...),
+func urlOrigin(u *url.URL) string {
+	return strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Host)
+}
+
+// validateEndpoint permits HTTPS TeraBox hosts and explicitly configured
+// origins. The latter also allows local HTTP test servers without allowing
+// a server response to introduce a new insecure or unrelated endpoint.
+func (c *Client) validateEndpoint(u *url.URL) error {
+	if u == nil || u.Hostname() == "" || u.User != nil || (u.Scheme != "https" && u.Scheme != "http") {
+		return errors.New("invalid API endpoint")
+	}
+	if _, ok := c.trustedOrigins[urlOrigin(u)]; ok {
+		return nil
+	}
+	host := strings.ToLower(u.Hostname())
+	if u.Scheme == "https" && (host == TeraBoxDomain || strings.HasSuffix(host, "."+TeraBoxDomain)) {
+		return nil
+	}
+	return fmt.Errorf("untrusted API endpoint: %s", urlOrigin(u))
+}
+
+// backoffSleep waits between retry attempts (500ms, 1s, 2s, 4s, ...,
+// capped at 30s),
 // aborting early if the context is done. This replaces the fixed 500ms
 // sleep used by the JS client.
 func backoffSleep(ctx context.Context, attempt int) error {
-	d := time.Duration(500<<uint(attempt)) * time.Millisecond
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	d := min(500*time.Millisecond<<uint(min(max(attempt, 0), 6)), 30*time.Second)
+	timer := time.NewTimer(d)
+	defer timer.Stop()
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-time.After(d):
+	case <-timer.C:
 		return nil
 	}
 }
@@ -530,10 +585,17 @@ func (c *Client) UpdateAppData(ctx context.Context, customPath string) (*Templat
 func (c *Client) updateAppDataOnce(ctx context.Context, customPath string) (*TemplateData, error) {
 	const maxRedirects = 5
 
-	webHost, _, _ := c.snapshot()
+	c.mu.RLock()
+	webHost := c.whost
+	localCookies := make(map[string]string, len(c.cookies))
+	for name, value := range c.cookies {
+		localCookies[name] = value
+	}
+	c.mu.RUnlock()
+	var pendingCookies []*http.Cookie
 	target := "/main"
 	if customPath != "" {
-		target = "/" + customPath
+		target = "/" + strings.TrimPrefix(customPath, "/")
 	}
 	rawURL := webHost + target
 
@@ -544,7 +606,7 @@ func (c *Client) updateAppDataOnce(ctx context.Context, customPath string) (*Tem
 			return nil, err
 		}
 		req.Header.Set("User-Agent", c.userAgent)
-		_, _, cookieHeader := c.snapshot()
+		cookieHeader := serializeCookies(localCookies)
 		if cookieHeader != "" {
 			req.Header.Set("Cookie", cookieHeader)
 		}
@@ -555,42 +617,40 @@ func (c *Client) updateAppDataOnce(ctx context.Context, customPath string) (*Tem
 		}
 
 		sc := resp.StatusCode
-		if sc != http.StatusMovedPermanently && sc != http.StatusFound && sc != http.StatusSeeOther {
+		if sc != http.StatusMovedPermanently && sc != http.StatusFound && sc != http.StatusSeeOther &&
+			sc != http.StatusTemporaryRedirect && sc != http.StatusPermanentRedirect {
 			break
 		}
 
-		location := resp.Header.Get("Location")
-		c.mergeCookies(resp.Cookies())
-		resp.Body.Close()
-		resp = nil
-		if location == "" {
+		if resp.Header.Get("Location") == "" {
+			resp.Body.Close()
 			return nil, errors.New("redirect response without Location header")
 		}
-		if location == "/login" { // parity with the JS client
-			location = webHost + "/login"
-		}
-		if hops+1 > maxRedirects {
+		if hops >= maxRedirects {
+			resp.Body.Close()
 			return nil, errors.New("too many redirects")
 		}
-		base, err := url.Parse(rawURL)
+		next, err := resp.Location()
 		if err != nil {
+			resp.Body.Close()
 			return nil, err
 		}
-		next, err := base.Parse(location)
-		if err != nil {
+		if err := c.validateEndpoint(next); err != nil {
+			resp.Body.Close()
 			return nil, err
 		}
-		if origin := next.Scheme + "://" + next.Host; origin != webHost {
-			webHost = origin
-			c.mu.Lock()
-			c.whost = origin
-			c.mu.Unlock()
-			c.warn("default hostname changed", "host", origin)
-		}
+		cookies := resp.Cookies()
+		mergeCookieValues(localCookies, cookies)
+		pendingCookies = append(pendingCookies, cookies...)
+		resp.Body.Close()
+		resp = nil
+		webHost = urlOrigin(next)
 		rawURL = next.String()
 	}
 	defer resp.Body.Close()
-	c.mergeCookies(resp.Cookies())
+	if resp.StatusCode != http.StatusOK {
+		return nil, &httpStatusError{StatusCode: resp.StatusCode}
+	}
 
 	page, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -598,8 +658,18 @@ func (c *Client) updateAppDataOnce(ctx context.Context, customPath string) (*Tem
 	}
 
 	td := &TemplateData{}
+	hasVIPIdentity := false
 	if raw := extractTemplateData(string(page)); raw != "" {
-		_ = json.Unmarshal([]byte(raw), td) // tolerate schema drift
+		if err := json.Unmarshal([]byte(raw), td); err != nil {
+			return nil, fmt.Errorf("invalid templateData: %w", err)
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(raw), &fields); err != nil {
+			return nil, fmt.Errorf("invalid templateData: %w", err)
+		}
+		if v, ok := fields["userVipIdentity"]; ok && strings.TrimSpace(string(v)) != "null" {
+			hasVIPIdentity = true
+		}
 	}
 
 	if td.JsToken != "" {
@@ -610,27 +680,47 @@ func (c *Client) updateAppDataOnce(ctx context.Context, customPath string) (*Tem
 		td.JsToken = m[1]
 	}
 
-	if logID := resp.Header.Get("logid"); logID != "" {
-		c.updateData(func(d *appData) { d.logID = logID })
+	if td.Csrf == "" && td.PcfToken == "" && td.BdsToken == "" && td.JsToken == "" {
+		return nil, errors.New("page does not contain usable session tokens")
 	}
-	c.updateData(func(d *appData) {
-		d.csrf = td.Csrf
-		d.pcfToken = td.PcfToken
-		d.bdsToken = td.BdsToken
-		d.jsToken = td.JsToken
-	})
-	c.updateParams(func(p *accountParams) {
-		p.accountID = td.UK
-		if td.UserVipIdentity > 0 {
-			p.isVIP = true
-			p.vipType = 1
-		}
-	})
+	if target == "/main" && td.JsToken == "" {
+		return nil, errors.New("jsToken is unavailable (login required)")
+	}
 
-	if td.JsToken == "" {
-		if finalURL, err := url.Parse(rawURL); err == nil && finalURL.Path == "/login" {
-			c.logError("failed to update jsToken [Login Required]")
+	pendingCookies = append(pendingCookies, resp.Cookies()...)
+	c.mu.Lock()
+	mergeCookieValues(c.cookies, pendingCookies)
+	oldHost := c.whost
+	c.whost = webHost
+	if logID := resp.Header.Get("logid"); logID != "" {
+		c.data.logID = logID
+	}
+	if td.Csrf != "" {
+		c.data.csrf = td.Csrf
+	}
+	if td.PcfToken != "" {
+		c.data.pcfToken = td.PcfToken
+	}
+	if td.BdsToken != "" {
+		c.data.bdsToken = td.BdsToken
+	}
+	if td.JsToken != "" {
+		c.data.jsToken = td.JsToken
+	}
+	if td.UK > 0 {
+		c.params.accountID = td.UK
+		if hasVIPIdentity {
+			c.params.isVIP = td.UserVipIdentity > 0
+			if c.params.isVIP {
+				c.params.vipType = 1
+			} else {
+				c.params.vipType = 0
+			}
 		}
+	}
+	c.mu.Unlock()
+	if oldHost != webHost {
+		c.warn("default hostname changed", "host", webHost)
 	}
 
 	return td, nil

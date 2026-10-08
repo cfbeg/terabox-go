@@ -52,6 +52,9 @@ func (c *Client) GetHomeInfo(ctx context.Context) (*HomeInfoResponse, error) {
 		return nil, err
 	}
 	if resp.Errno == 0 {
+		if resp.Data.Sign1 == "" || resp.Data.Sign3 == "" || resp.Data.Timestamp <= 0 {
+			return nil, wrapErr(op, errors.New("home info is missing valid sign1, sign3, or timestamp"))
+		}
 		resp.Data.SignB = SignDownload(resp.Data.Sign3, resp.Data.Sign1)
 	}
 	return &resp, nil
@@ -70,7 +73,7 @@ func (c *Client) Download(ctx context.Context, fsIDs []int64) (*DownloadResponse
 		return nil, wrapErr(op, err)
 	}
 	if homeInfo.Errno != 0 {
-		return nil, wrapErr(op, errors.New("API error! Bad HomeInfo response"))
+		return nil, wrapErr(op, &APIError{Code: homeInfo.Errno})
 	}
 
 	fidList, err := json.Marshal(fsIDs)

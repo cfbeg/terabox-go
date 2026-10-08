@@ -105,6 +105,9 @@ func (c *Client) CheckLogin(ctx context.Context) (*CheckLoginResponse, error) {
 		if err != nil {
 			return nil, err
 		}
+		if regionPrefix != "" && !validRegionPrefix(regionPrefix) {
+			return nil, wrapErr(op, fmt.Errorf("invalid region-domain-prefix %q", regionPrefix))
+		}
 		if regionPrefix != "" && attempt+1 < maxAttempts {
 			newHost := "https://" + regionPrefix + "." + TeraBoxDomain
 			c.mu.Lock()
@@ -119,6 +122,21 @@ func (c *Client) CheckLogin(ctx context.Context) (*CheckLoginResponse, error) {
 		}
 		return &resp, nil
 	}
+}
+
+// validRegionPrefix accepts one ASCII DNS label, so the regional hostname
+// cannot introduce a different domain, URL path, userinfo, or port.
+func validRegionPrefix(prefix string) bool {
+	if len(prefix) == 0 || len(prefix) > 63 || prefix[0] == '-' || prefix[len(prefix)-1] == '-' {
+		return false
+	}
+	for i := 0; i < len(prefix); i++ {
+		ch := prefix[i]
+		if !(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 // UserMembership fetches the membership info and stores the VIP status.
@@ -176,15 +194,19 @@ func (c *Client) GetUserInfo(ctx context.Context, userID int64) (*UserInfoRespon
 func (c *Client) GetCurrentUserInfo(ctx context.Context) (*UserInfoResponse, error) {
 	const op = "getCurrentUserInfo"
 	if c.Account().ID == 0 {
-		if _, err := c.CheckLogin(ctx); err != nil {
+		login, err := c.CheckLogin(ctx)
+		if err != nil {
 			return nil, wrapErr(op, err)
+		}
+		if login.Errno != 0 {
+			return nil, wrapErr(op, &APIError{Code: login.Errno, Message: login.ShowMsg})
 		}
 	}
 	curUser, err := c.GetUserInfo(ctx, c.Account().ID)
 	if err != nil {
 		return nil, wrapErr(op, err)
 	}
-	if len(curUser.Records) > 0 {
+	if curUser.Errno == 0 && len(curUser.Records) > 0 {
 		thisUser := curUser.Records[0]
 		c.updateParams(func(p *accountParams) {
 			p.accountName = thisUser.UName

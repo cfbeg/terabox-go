@@ -19,7 +19,11 @@ import (
 // SignDownload generates a signed download token using the RC4 stream
 // cipher with key s1 over input s2, returned as standard Base64.
 // It mirrors the inline KSA+PRGA of the JS signDownload() exactly.
+// An empty key returns an empty token.
 func SignDownload(s1, s2 string) string {
+	if s1 == "" {
+		return ""
+	}
 	// JS reads charCodeAt (UTF-16 code units) and truncates to a byte when
 	// storing into a Uint8Array. Runes reproduce that for BMP text; the
 	// token data involved is ASCII in practice.

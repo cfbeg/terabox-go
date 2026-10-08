@@ -80,7 +80,8 @@ type PassportResponse struct {
 
 // PublicKeyResponse is the /passport/getpubkey result.
 type PublicKeyResponse struct {
-	Code int `json:"code"`
+	Code int    `json:"code"`
+	Msg  string `json:"msg"`
 	Data struct {
 		PP1 string `json:"pp1"`
 		PP2 string `json:"pp2"`
@@ -154,9 +155,19 @@ func (c *Client) PassportPreLogin(ctx context.Context, email string) (*PreLoginR
 // its ChallengeURL can be shown to the user for manual captcha solving.
 func (c *Client) PassportLogin(ctx context.Context, pre *PreLoginResponse, email, password string) (*PassportResponse, error) {
 	const op = "passportLogin"
+	if pre == nil {
+		return nil, wrapErr(op, fmt.Errorf("prelogin response is nil"))
+	}
+	if pre.Code != 0 {
+		return nil, wrapErr(op, &APIError{Code: pre.Code, Message: pre.Msg})
+	}
 	if c.dataSnapshot().pubKey == "" {
-		if _, err := c.GetPublicKey(ctx); err != nil {
+		key, err := c.GetPublicKey(ctx)
+		if err != nil {
 			return nil, wrapErr(op, err)
+		}
+		if key.Code != 0 {
+			return nil, wrapErr(op, &APIError{Code: key.Code, Message: key.Msg})
 		}
 	}
 	browserid, _ := c.CookieValue("browserid")
@@ -263,12 +274,6 @@ func (c *Client) RegisterVerify(ctx context.Context, regToken, code string) (*Pa
 // contains the ndus token; create a new client with it.
 func (c *Client) RegisterFinish(ctx context.Context, regToken, password string) (*PassportResponse, error) {
 	const op = "regFinish"
-	if c.dataSnapshot().pubKey == "" {
-		if _, err := c.GetPublicKey(ctx); err != nil {
-			return nil, wrapErr(op, err)
-		}
-	}
-
 	hasLetter := false
 	for i := 0; i < len(password); i++ {
 		ch := password[i]
@@ -279,6 +284,16 @@ func (c *Client) RegisterFinish(ctx context.Context, regToken, password string) 
 	}
 	if len(password) < 6 || len(password) > 15 || !hasLetter {
 		return &PassportResponse{Code: -2, LogID: 0, Msg: "invalid password"}, nil
+	}
+
+	if c.dataSnapshot().pubKey == "" {
+		key, err := c.GetPublicKey(ctx)
+		if err != nil {
+			return nil, wrapErr(op, err)
+		}
+		if key.Code != 0 {
+			return nil, wrapErr(op, &APIError{Code: key.Code, Message: key.Msg})
+		}
 	}
 
 	encpwd, err := EncryptRSA(password, c.dataSnapshot().pubKey, RSAMD5Preprocess)

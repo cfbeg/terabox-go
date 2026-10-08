@@ -3,6 +3,8 @@ package terabox
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -317,8 +319,10 @@ func (c *Client) GetFileMeta(ctx context.Context, targets []FileMetaTarget) (*Fi
 	return &resp, nil
 }
 
-// GetRecentUploads retrieves the account's recent uploads.
-func (c *Client) GetRecentUploads(ctx context.Context, page int) (*RecentUploadsResponse, error) {
+// GetRecentUploads retrieves the account's recent uploads. The page argument
+// is retained for source compatibility and ignored: pagination parameters for
+// /rest/recent/listall have not been verified by the upstream implementation.
+func (c *Client) GetRecentUploads(ctx context.Context, _ int) (*RecentUploadsResponse, error) {
 	const op = "getRecentUploads"
 
 	query := c.appQuery()
@@ -360,20 +364,26 @@ func (c *Client) fileDiffOnce(ctx context.Context, cursor string) (*FileDiffResp
 	if err != nil {
 		return nil, err
 	}
-	if resp.Errno == 0 {
-		next := resp.Cursor
-		c.updateParams(func(p *accountParams) { p.cursor = next })
-	}
 	return &resp, nil
 }
 
 // FileDiff retrieves file difference (delta) information for
 // synchronization, following has_more pagination (at most 100 extra
-// pages) and merging entries. On request failure the stored cursor is
-// reset so the next call performs a full sync.
+// pages) and merging entries. Concurrent calls are serialized; cancellation
+// while waiting is checked once the previous call completes. The stored cursor
+// advances only after all pages succeed. Request failures, pagination limits,
+// or non-advancing cursors reset it so the next call performs a full sync.
+// A first-page API failure is returned in Errno; later API failures become
+// *APIError wrapped in *Error, without returning incomplete entries.
 func (c *Client) FileDiff(ctx context.Context) (*FileDiffResponse, error) {
 	const op = "fileDiff"
-	const maxPages = 100
+	const maxPages = 101 // initial page plus at most 100 extra pages
+
+	c.fileDiffMu.Lock()
+	defer c.fileDiffMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, wrapErr(op, err)
+	}
 
 	c.mu.RLock()
 	cursor := c.params.cursor
@@ -383,36 +393,52 @@ func (c *Client) FileDiff(ctx context.Context) (*FileDiffResponse, error) {
 		c.updateParams(func(p *accountParams) { p.cursor = "null" })
 	}
 
-	res, err := c.fileDiffOnce(ctx, cursor)
-	if err != nil {
-		resetCursor()
-		return nil, err
-	}
-
-	for pages := 0; res.Errno == 0 && res.HasMore && pages < maxPages; pages++ {
-		c.mu.RLock()
-		cursor = c.params.cursor
-		c.mu.RUnlock()
-
+	seen := map[string]struct{}{cursor: {}}
+	var res *FileDiffResponse
+	for pages := 0; pages < maxPages; pages++ {
 		next, err := c.fileDiffOnce(ctx, cursor)
 		if err != nil {
 			resetCursor()
 			return nil, err
 		}
 		if next.Errno != 0 {
-			break
+			resetCursor()
+			if res == nil {
+				return next, nil
+			}
+			return nil, wrapErr(op, &APIError{Code: next.Errno})
 		}
-		res.Reset = next.Reset
-		res.RequestIDs = append(res.RequestIDs, next.RequestIDs...)
-		if res.Entries == nil {
-			res.Entries = map[string]FileEntry{}
+		if next.Cursor == "" {
+			resetCursor()
+			return nil, wrapErr(op, errors.New("filediff response is missing cursor"))
 		}
-		for k, v := range next.Entries {
-			res.Entries[k] = v
+		if res == nil {
+			res = next
+		} else {
+			res.Reset = res.Reset || next.Reset
+			res.RequestIDs = append(res.RequestIDs, next.RequestIDs...)
+			if res.Entries == nil {
+				res.Entries = map[string]FileEntry{}
+			}
+			for k, v := range next.Entries {
+				res.Entries[k] = v
+			}
+			res.Cursor = next.Cursor
+			res.HasMore = next.HasMore
 		}
-		res.HasMore = next.HasMore
+		if !next.HasMore {
+			c.updateParams(func(p *accountParams) { p.cursor = next.Cursor })
+			return res, nil
+		}
+		if _, exists := seen[next.Cursor]; exists {
+			resetCursor()
+			return nil, wrapErr(op, errors.New("filediff pagination cursor did not advance"))
+		}
+		seen[next.Cursor] = struct{}{}
+		cursor = next.Cursor
 	}
-	return res, nil
+	resetCursor()
+	return nil, wrapErr(op, fmt.Errorf("filediff pagination limit exceeded (%d pages)", maxPages))
 }
 
 // GenPanToken generates a PAN token for subsequent API requests.

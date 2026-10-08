@@ -11,6 +11,7 @@ import (
 	"hash"
 	"hash/crc32"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -51,6 +52,9 @@ type FileHashes struct {
 	File   string   // MD5 of the whole file
 	ETag   string   // File, or md5(chunksJSON)-N for multi-chunk files
 	Chunks []string // per-chunk MD5 in upload order
+	// ChunkSize preserves the boundaries used to calculate Chunks. Zero
+	// retains the legacy behavior of deriving them from the current account.
+	ChunkSize int64
 }
 
 // ProgressEvent is delivered to a ProgressFunc during hashing/uploading.
@@ -63,7 +67,8 @@ type ProgressEvent struct {
 }
 
 // ProgressFunc receives upload flow progress notifications. It is called
-// from client-internal goroutines and must not block for long.
+// from the calling goroutine or client-internal goroutines and must not
+// block for long.
 type ProgressFunc func(ProgressEvent)
 
 // makeRemoteFPath joins a remote directory and file name with exactly one
@@ -81,25 +86,27 @@ func makeRemoteFPath(sdir, sfile string) string {
 func (c *Client) HashFile(ctx context.Context, filePath string, onProgress ProgressFunc) (*FileHashes, error) {
 	const op = "hashFile"
 
-	st, err := os.Stat(filePath)
-	if err != nil {
-		return nil, wrapErr(op, err)
-	}
-	size := st.Size()
-	splitSize := GetChunkSize(size, c.Account().IsVIP)
-
 	f, err := os.Open(filePath)
 	if err != nil {
 		return nil, wrapErr(op, err)
 	}
 	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return nil, wrapErr(op, err)
+	}
+	if !st.Mode().IsRegular() {
+		return nil, wrapErr(op, errors.New("local path is not a regular file"))
+	}
+	size := st.Size()
+	splitSize := GetChunkSize(size, c.Account().IsVIP)
 
 	crcHash := crc32.NewIEEE()
 	fileHash := md5.New()
 	sliceHash := md5.New()
 	chunkHash := md5.New()
 
-	hashData := &FileHashes{}
+	hashData := &FileHashes{ChunkSize: splitSize, Chunks: []string{}}
 	var bytesRead, allBytesRead int64
 
 	buf := make([]byte, 1<<20)
@@ -152,6 +159,13 @@ func (c *Client) HashFile(ctx context.Context, filePath string, onProgress Progr
 		}
 	}
 
+	finalStat, err := f.Stat()
+	if err != nil {
+		return nil, wrapErr(op, err)
+	}
+	if allBytesRead != size || finalStat.Size() != size {
+		return nil, wrapErr(op, errors.New("local file size changed while hashing"))
+	}
 	if bytesRead > 0 {
 		hashData.Chunks = append(hashData.Chunks, hex.EncodeToString(chunkHash.Sum(nil)))
 	}
@@ -170,6 +184,8 @@ func (c *Client) HashFile(ctx context.Context, filePath string, onProgress Progr
 }
 
 // UploadData carries one file through the precreate/chunks/create flow.
+// UploadChunks updates Uploaded and Hash.Chunks; callers must not share
+// this state with concurrent upload calls or access it until the call ends.
 type UploadData struct {
 	RemoteDir   string
 	File        string
@@ -255,17 +271,62 @@ type CreateFileResponse struct {
 // errHashRequired is returned by upload steps called without hash data.
 var errHashRequired = errors.New("hash data required")
 
+func validateUploadTarget(data *UploadData) error {
+	if data == nil {
+		return errors.New("upload data required")
+	}
+	if data.Size < 0 {
+		return errors.New("file size must not be negative")
+	}
+	if data.File == "" {
+		return errors.New("remote file name required")
+	}
+	return nil
+}
+
+func validateUploadHashes(data *UploadData) error {
+	if err := validateUploadTarget(data); err != nil {
+		return err
+	}
+	if data.Hash == nil {
+		return errHashRequired
+	}
+	if data.Hash.ChunkSize < 0 {
+		return errors.New("chunk size must not be negative")
+	}
+	return nil
+}
+
+func (c *Client) uploadChunkSize(data *UploadData) int64 {
+	if data.Hash.ChunkSize > 0 {
+		return data.Hash.ChunkSize
+	}
+	return GetChunkSize(data.Size, c.Account().IsVIP)
+}
+
+func uploadChunkCount(size, chunkSize int64) int64 {
+	if size == 0 {
+		return 0
+	}
+	return 1 + (size-1)/chunkSize
+}
+
 // PrecreateFile initiates an upload, reserving an upload ID. On errno
 // 4000023 ("need verify") the app tokens are refreshed and the request is
 // retried once.
 func (c *Client) PrecreateFile(ctx context.Context, data *UploadData) (*PrecreateResponse, error) {
 	const op = "precreateFile"
-	if data.Hash == nil {
-		return nil, wrapErr(op, errHashRequired)
+	if err := validateUploadHashes(data); err != nil {
+		return nil, wrapErr(op, err)
 	}
 
 	var blockList string
-	if CheckMD5Slice(data.Hash.Chunks) {
+	if data.Size == 0 {
+		if len(data.Hash.Chunks) != 0 {
+			return nil, wrapErr(op, errors.New("empty file must not have chunk hashes"))
+		}
+		blockList = "[]"
+	} else if CheckMD5Slice(data.Hash.Chunks) {
 		b, _ := json.Marshal(data.Hash.Chunks)
 		blockList = string(b)
 	} else {
@@ -324,8 +385,8 @@ func (c *Client) PrecreateFile(ctx context.Context, data *UploadData) (*Precreat
 // data transfer entirely when the server already has the file.
 func (c *Client) RapidUpload(ctx context.Context, data *UploadData) (*RapidUploadResponse, error) {
 	const op = "rapidUpload"
-	if data.Hash == nil {
-		return nil, wrapErr(op, errHashRequired)
+	if err := validateUploadHashes(data); err != nil {
+		return nil, wrapErr(op, err)
 	}
 	if data.Size < sliceMD5Size {
 		return nil, wrapErr(op, errors.New("File size too small!"))
@@ -379,6 +440,17 @@ func (c *Client) GetUploadHost(ctx context.Context) (*LocateUploadResponse, erro
 	}
 	if resp.Errno == 0 {
 		uhost := "https://" + resp.Host
+		u, err := url.Parse(uhost)
+		if err != nil {
+			return nil, wrapErr(op, err)
+		}
+		if u.User != nil || u.Host == "" || u.Host != resp.Host || u.Host != u.Hostname() ||
+			u.Path != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+			return nil, wrapErr(op, errors.New("upload host must be a hostname without URL components"))
+		}
+		if err := c.validateEndpoint(u); err != nil {
+			return nil, wrapErr(op, err)
+		}
 		c.mu.Lock()
 		c.uhost = uhost
 		c.mu.Unlock()
@@ -390,6 +462,21 @@ func (c *Client) GetUploadHost(ctx context.Context) (*LocateUploadResponse, erro
 // streamed (never buffered in memory) and must provide exactly size bytes.
 func (c *Client) UploadChunk(ctx context.Context, data *UploadData, partSeq int, src io.Reader, size int64) (*ChunkUploadResult, error) {
 	const op = "uploadChunk"
+	if err := validateUploadTarget(data); err != nil {
+		return nil, wrapErr(op, err)
+	}
+	if strings.TrimSpace(data.UploadID) == "" {
+		return nil, wrapErr(op, errors.New("upload ID required"))
+	}
+	if partSeq < 0 {
+		return nil, wrapErr(op, errors.New("part sequence must not be negative"))
+	}
+	if src == nil {
+		return nil, wrapErr(op, errors.New("chunk source required"))
+	}
+	if size <= 0 {
+		return nil, wrapErr(op, errors.New("chunk size must be positive"))
+	}
 
 	var rb [16]byte
 	if _, err := rand.Read(rb[:]); err != nil {
@@ -401,6 +488,9 @@ func (c *Client) UploadChunk(ctx context.Context, data *UploadData, partSeq int,
 		"Content-Disposition: form-data; name=\"file\"; filename=\"blob\"\r\n" +
 		"Content-Type: application/octet-stream\r\n\r\n"
 	bodyTail := "\r\n--" + boundary + "--\r\n"
+	if size > math.MaxInt64-int64(len(bodyHead)+len(bodyTail)) {
+		return nil, wrapErr(op, errors.New("chunk size exceeds maximum content length"))
+	}
 
 	_, uploadHost, cookieHeader := c.snapshot()
 
@@ -439,6 +529,9 @@ func (c *Client) UploadChunk(ctx context.Context, data *UploadData, partSeq int,
 	if res.ErrorCode != 0 {
 		return nil, wrapErr(op, fmt.Errorf("Upload failed! Error Code #%d (%s)", res.ErrorCode, res.ErrorMsg))
 	}
+	if !CheckMD5Value(res.MD5) {
+		return nil, wrapErr(op, errors.New("upload response is missing a valid chunk MD5"))
+	}
 	return &res, nil
 }
 
@@ -451,19 +544,44 @@ type UploadOptions struct {
 
 // UploadChunks uploads every not-yet-uploaded chunk of a file with a
 // worker pool, MD5 verification and retries. It cancels the remaining
-// parts on the first part that exhausts its retries.
+// parts on the first part that exhausts its retries. Hash.ChunkSize fixes
+// the chunk boundaries; zero uses the current account for legacy callers.
+// Empty files have no parts, so this step makes no HTTP requests. Creation
+// of the remote entry remains the responsibility of CreateFile.
 func (c *Client) UploadChunks(ctx context.Context, data *UploadData, filePath string, opts *UploadOptions) error {
 	const op = "uploadChunks"
 
-	if data.Hash == nil {
-		return wrapErr(op, errHashRequired)
+	if err := validateUploadHashes(data); err != nil {
+		return wrapErr(op, err)
 	}
 	totalChunks := len(data.Hash.Chunks)
-	if totalChunks == 0 {
-		return wrapErr(op, errors.New("no chunk hashes"))
+	splitSize := c.uploadChunkSize(data)
+	if expected := uploadChunkCount(data.Size, splitSize); int64(totalChunks) != expected {
+		return wrapErr(op, fmt.Errorf("chunk count %d does not match file size %d and chunk size %d (want %d)", totalChunks, data.Size, splitSize, expected))
 	}
 	if len(data.Uploaded) != totalChunks {
 		return wrapErr(op, fmt.Errorf("uploaded length %d does not match chunk count %d", len(data.Uploaded), totalChunks))
+	}
+	if data.Size > 0 && strings.TrimSpace(data.UploadID) == "" {
+		return wrapErr(op, errors.New("upload ID required"))
+	}
+	if err := ctx.Err(); err != nil {
+		return wrapErr(op, err)
+	}
+	file, err := os.Open(filePath)
+	if err != nil {
+		return wrapErr(op, err)
+	}
+	defer file.Close()
+	st, err := file.Stat()
+	if err != nil {
+		return wrapErr(op, err)
+	}
+	if !st.Mode().IsRegular() {
+		return wrapErr(op, errors.New("local path is not a regular file"))
+	}
+	if st.Size() != data.Size {
+		return wrapErr(op, fmt.Errorf("local file size %d does not match upload size %d", st.Size(), data.Size))
 	}
 
 	maxTasks, maxTries := 10, 5
@@ -480,7 +598,6 @@ func (c *Client) UploadChunks(ctx context.Context, data *UploadData, filePath st
 	maxTasks = max(maxTasks, 1)
 	maxTries = max(maxTries, 1)
 
-	splitSize := GetChunkSize(data.Size, c.Account().IsVIP)
 	pending := make([]int, 0, totalChunks)
 	var sentTotal, partsDone int64
 	for i := 0; i < totalChunks; i++ {
@@ -492,15 +609,12 @@ func (c *Client) UploadChunks(ctx context.Context, data *UploadData, filePath st
 		}
 	}
 	if len(pending) == 0 {
+		if progress != nil {
+			progress(ProgressEvent{Phase: "upload", Sent: sentTotal, Total: data.Size, PartsDone: int(partsDone), PartsTotal: totalChunks})
+		}
 		return nil
 	}
-	maxTasks = min(maxTasks, totalChunks)
-
-	file, err := os.Open(filePath)
-	if err != nil {
-		return wrapErr(op, err)
-	}
-	defer file.Close()
+	maxTasks = min(maxTasks, len(pending))
 
 	childCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -585,6 +699,11 @@ func (c *Client) UploadChunks(ctx context.Context, data *UploadData, filePath st
 				}
 			} else {
 				lastErr = err
+				var statusErr *httpStatusError
+				if errors.As(err, &statusErr) && statusErr.StatusCode >= 400 && statusErr.StatusCode < 500 &&
+					statusErr.StatusCode != http.StatusRequestTimeout && statusErr.StatusCode != http.StatusTooManyRequests {
+					return fmt.Errorf("Upload failed! [PART #%d]: %w", i+1, err)
+				}
 			}
 
 			args := []any{"part", i + 1, "error", lastErr}
@@ -644,11 +763,24 @@ func (c *Client) UploadChunks(ctx context.Context, data *UploadData, filePath st
 // uploaded. On success EMD5 is decoded into MD5 and ETag is derived.
 func (c *Client) CreateFile(ctx context.Context, data *UploadData) (*CreateFileResponse, error) {
 	const op = "createFile"
-	if data.Hash == nil {
-		return nil, wrapErr(op, errHashRequired)
+	if err := validateUploadHashes(data); err != nil {
+		return nil, wrapErr(op, err)
+	}
+	if strings.TrimSpace(data.UploadID) == "" {
+		return nil, wrapErr(op, errors.New("upload ID required"))
+	}
+	if expected := uploadChunkCount(data.Size, c.uploadChunkSize(data)); int64(len(data.Hash.Chunks)) != expected {
+		return nil, wrapErr(op, fmt.Errorf("chunk count %d does not match expected count %d", len(data.Hash.Chunks), expected))
+	}
+	if data.Size > 0 && !CheckMD5Slice(data.Hash.Chunks) {
+		return nil, wrapErr(op, errors.New("valid chunk hashes required to create file"))
 	}
 
-	blockJSON, _ := json.Marshal(data.Hash.Chunks)
+	chunks := data.Hash.Chunks
+	if chunks == nil {
+		chunks = []string{}
+	}
+	blockJSON, _ := json.Marshal(chunks)
 
 	form := newForm()
 	form.Append("path", makeRemoteFPath(data.RemoteDir, data.File))

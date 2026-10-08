@@ -40,6 +40,20 @@ func (e *Error) Error() string { return "terabox: " + e.Op + ": " + e.Err.Error(
 
 func (e *Error) Unwrap() error { return e.Err }
 
+// APIError preserves a server result code when a multi-request operation
+// cannot complete. Single-request methods still expose codes in responses.
+type APIError struct {
+	Code    int
+	Message string
+}
+
+func (e *APIError) Error() string {
+	if e.Message != "" {
+		return fmt.Sprintf("API error %d: %s", e.Code, e.Message)
+	}
+	return fmt.Sprintf("API error %d", e.Code)
+}
+
 func wrapErr(op string, err error) error {
 	if err == nil {
 		return nil
