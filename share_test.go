@@ -51,7 +51,7 @@ func TestShareMetadataRequestShapesAndCookies(t *testing.T) {
 				if req.URL.Path != wantPath || query.Get("shorturl") != wantKey || query.Get("root") != "1" {
 					t.Fatalf("unexpected request: %s", req.URL)
 				}
-				if query.Get("jsToken") != "local-token" || query.Get("dp-logid") != "local-log" || query.Get("app_id") != "250528" || query.Get("web") != "1" {
+				if query.Get("jsToken") != "local-token" || query.Get("dp-logid") != "local-log" || query.Get("app_id") != "250528" || query.Get("web") != "1" || query.Get("channel") != "dubox" || query.Get("clienttype") != "0" {
 					t.Fatalf("missing common params: %v", query)
 				}
 				if test.list && (query.Get("page") != "2" || query.Get("num") != "20000" || query.Get("by") != "name" || query.Get("order") != "asc") {
@@ -92,18 +92,42 @@ func TestShareMetadataRequestShapesAndCookies(t *testing.T) {
 }
 
 func TestShareMetadataWorksWithoutLoginToken(t *testing.T) {
-	c := NewClient("", WithHTTPClient(&http.Client{Transport: shareRoundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if req.URL.Path != "/share/list" || req.URL.Query().Get("page") != "1" {
-			t.Fatalf("unexpected unauthenticated request: %s", req.URL)
-		}
-		if _, ok := req.URL.Query()["jsToken"]; ok {
-			t.Fatal("empty jsToken was sent")
-		}
-		return shareJSONResponse(req, `{"errno":0,"share_id":123,"uk":456,"list":[]}`), nil
-	})}))
-	response, err := c.GetShareList(context.Background(), "normalized", 0)
-	if err != nil || response.List == nil || len(response.List) != 0 {
-		t.Fatalf("empty public share list: response=%+v err=%v", response, err)
+	for _, list := range []bool{false, true} {
+		t.Run(map[bool]string{false: "metadata", true: "list"}[list], func(t *testing.T) {
+			c := NewClient("", WithHTTPClient(&http.Client{Transport: shareRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+				wantPath, wantKey := "/api/shorturlinfo", "1normalized"
+				if list {
+					wantPath, wantKey = "/share/list", "normalized"
+				}
+				query := req.URL.Query()
+				if req.Method != http.MethodGet || req.URL.Path != wantPath || query.Get("shorturl") != wantKey || query.Get("root") != "1" {
+					t.Fatalf("unexpected unauthenticated request: %s %s", req.Method, req.URL)
+				}
+				if query.Has("web") || query.Has("jsToken") {
+					t.Fatalf("anonymous metadata sent web or an empty token: %v", query)
+				}
+				if query.Get("app_id") != "250528" || query.Get("channel") != "dubox" || query.Get("clienttype") != "0" || query.Get("dp-logid") != "0" || !query.Has("scene") || query.Get("scene") != "" {
+					t.Fatalf("anonymous metadata lost common params: %v", query)
+				}
+				if list && (query.Get("page") != "1" || query.Get("num") != "20000" || query.Get("by") != "name" || query.Get("order") != "asc") {
+					t.Fatalf("anonymous metadata lost list params: %v", query)
+				}
+				if req.Header.Get("Cookie") != "lang=en" || req.Header.Get("Referer") != "https://www.terabox.com" || req.Header.Get("X-Requested-With") != "XMLHttpRequest" {
+					t.Fatalf("anonymous metadata headers changed: %v", req.Header)
+				}
+				return shareJSONResponse(req, `{"errno":0,"share_id":123,"uk":456,"list":[]}`), nil
+			})}))
+			var response *ShareInfoResponse
+			var err error
+			if list {
+				response, err = c.GetShareList(context.Background(), "normalized", 0)
+			} else {
+				response, err = c.GetShareInfo(context.Background(), "normalized")
+			}
+			if err != nil || response.List == nil || len(response.List) != 0 {
+				t.Fatalf("empty public share list: response=%+v err=%v", response, err)
+			}
+		})
 	}
 }
 
@@ -179,6 +203,9 @@ func TestTransferShareRequestAndResponse(t *testing.T) {
 				if query.Get("shareid") != "123" || query.Get("from") != "456" || query.Get("ondup") != wantOnDup || query.Get("async") != "1" || query.Get("jsToken") != "local-token" || query.Get("dp-logid") != "local-log" {
 					t.Fatalf("unexpected transfer query: %v", query)
 				}
+				if query.Get("web") != "1" {
+					t.Fatal("authenticated transfer lost its web flag")
+				}
 				if _, exists := query["scene"]; exists {
 					t.Fatal("purchased_list scene added to ordinary transfer")
 				}
@@ -210,6 +237,9 @@ func TestTransferSharePreservesAPIErrorsWithoutRetry(t *testing.T) {
 	var calls int
 	c := NewClient("", WithHTTPClient(&http.Client{Transport: shareRoundTripFunc(func(req *http.Request) (*http.Response, error) {
 		calls++
+		if req.URL.Query().Get("web") != "1" {
+			t.Fatal("transfer without ndus lost its existing web flag")
+		}
 		return shareJSONResponse(req, `{"errno":400810,"errmsg":"token rejected","request_id":123}`), nil
 	})}))
 	c.updateData(func(data *appData) { data.jsToken = "local-token" })

@@ -139,6 +139,11 @@ func (c *Client) GetShareList(ctx context.Context, surl string, page int) (*Shar
 }
 
 func (c *Client) getShareMetadata(ctx context.Context, op, endpoint string, query url.Values, requireList bool) (*ShareInfoResponse, error) {
+	// Anonymous metadata requests with web=1 receive a verification response
+	// instead of the public share result. Authenticated reads retain the flag.
+	if ndus, _ := c.CookieValue("ndus"); ndus == "" {
+		query.Del("web")
+	}
 	var response ShareInfoResponse
 	var pendingCookies []*http.Cookie
 	headers := c.registrationHeaders()
