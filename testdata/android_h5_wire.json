@@ -1,0 +1,109 @@
+[
+  {
+    "url": "/passport/register_v4/sendcode",
+    "method": "post",
+    "params": {
+      "language_type": "",
+      "app_id": 250528,
+      "web": 1,
+      "channel": "fixture-channel",
+      "clienttype": 1,
+      "jsToken": "",
+      "devuid": "fixture-cuid",
+      "version": "4.26.5",
+      "rand": 0,
+      "time": 1791680000123,
+      "lang": "ja",
+      "cuid": "fixture-cuid",
+      "zid": ""
+    },
+    "data": {
+      "version": "4.26.5",
+      "devuid": "fixture-cuid",
+      "cuid": "fixture-cuid",
+      "lang": "ja",
+      "client": "android",
+      "pass_version": "2.8",
+      "clientfrom": "h5",
+      "psign": "fixture-psign",
+      "pcftoken": "fixture-pcf",
+      "email": "fixture@example.invalid",
+      "op_type": 1,
+      "choose_email": 0,
+      "g_identity": "",
+      "reg_source": "share"
+    },
+    "headers": {}
+  },
+  {
+    "url": "/passport/register_v4/verify",
+    "method": "post",
+    "params": {
+      "language_type": "",
+      "app_id": 250528,
+      "web": 1,
+      "channel": "fixture-channel",
+      "clienttype": 1,
+      "jsToken": "",
+      "devuid": "fixture-cuid",
+      "version": "4.26.5",
+      "rand": 0,
+      "time": 1791680000123,
+      "lang": "ja",
+      "cuid": "fixture-cuid",
+      "zid": ""
+    },
+    "data": {
+      "version": "4.26.5",
+      "devuid": "fixture-cuid",
+      "cuid": "fixture-cuid",
+      "lang": "ja",
+      "client": "android",
+      "pass_version": "2.8",
+      "clientfrom": "h5",
+      "psign": "fixture-psign",
+      "pcftoken": "fixture-pcf",
+      "token": "fixture-registration-token",
+      "code": "1234",
+      "skip_code": 0,
+      "support_unify": 1,
+      "g_identity": ""
+    },
+    "headers": {}
+  },
+  {
+    "url": "/passport/register_v4/finish",
+    "method": "post",
+    "params": {
+      "language_type": "",
+      "app_id": 250528,
+      "web": 1,
+      "channel": "fixture-channel",
+      "clienttype": 1,
+      "jsToken": "",
+      "devuid": "fixture-cuid",
+      "version": "4.26.5",
+      "rand": 0,
+      "time": 1791680000123,
+      "lang": "ja",
+      "cuid": "fixture-cuid",
+      "zid": ""
+    },
+    "data": {
+      "version": "4.26.5",
+      "devuid": "fixture-cuid",
+      "cuid": "fixture-cuid",
+      "lang": "ja",
+      "client": "android",
+      "pass_version": "2.8",
+      "clientfrom": "h5",
+      "psign": "fixture-psign",
+      "pcftoken": "fixture-pcf",
+      "token": "fixture-registration-token",
+      "pwd": "fixture-encrypted-password",
+      "g_identity": "",
+      "access_token": ""
+    },
+    "headers": {}
+  }
+]

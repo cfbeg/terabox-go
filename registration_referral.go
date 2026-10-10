@@ -69,6 +69,9 @@ func (c *Client) PrepareWebmasterReferralWithOptions(ctx context.Context, shareU
 	if err := validateReferralSource(source); err != nil {
 		return nil, wrapErr(op, err)
 	}
+	if c.isAndroidApp() && source != "share" {
+		return nil, wrapErr(op, errors.New("Android app referrals use the APK's share source"))
+	}
 	surl, err := ParseShareURL(shareURL)
 	if err != nil {
 		return nil, wrapErr(op, err)
@@ -116,14 +119,15 @@ func (c *Client) PrepareWebmasterReferralWithOptions(ctx context.Context, shareU
 // the email verification step or a transfer retry. It contains credentials;
 // passwords and verification codes are never included.
 type WebmasterRegistrationSession struct {
-	Referral              WebmasterReferral `json:"referral"`
-	Cookies               string            `json:"cookies"`
-	WebHost               string            `json:"web_host"`
-	RegistrationToken     string            `json:"registration_token,omitempty"`
-	NDUS                  string            `json:"ndus,omitempty"`
-	PCFToken              string            `json:"pcf_token,omitempty"`
-	RegistrationConfirmed bool              `json:"registration_confirmed"`
-	FinishAttempted       bool              `json:"finish_attempted"`
+	Referral              WebmasterReferral  `json:"referral"`
+	Cookies               string             `json:"cookies"`
+	WebHost               string             `json:"web_host"`
+	RegistrationToken     string             `json:"registration_token,omitempty"`
+	NDUS                  string             `json:"ndus,omitempty"`
+	PCFToken              string             `json:"pcf_token,omitempty"`
+	RegistrationConfirmed bool               `json:"registration_confirmed"`
+	FinishAttempted       bool               `json:"finish_attempted"`
+	AndroidApp            *AndroidAppProfile `json:"android_app,omitempty"`
 }
 
 // WebmasterRegistrationSession returns a serializable snapshot, or nil when
@@ -132,15 +136,23 @@ type WebmasterRegistrationSession struct {
 func (c *Client) WebmasterRegistrationSession() *WebmasterRegistrationSession {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if c.referral == nil {
+	if c.referral == nil && c.androidApp == nil {
 		return nil
 	}
-	return &WebmasterRegistrationSession{
-		Referral: *cloneWebmasterReferral(c.referral), Cookies: c.cookieHeaderLocked(),
+	result := &WebmasterRegistrationSession{
+		Cookies: c.cookieHeaderLocked(),
 		WebHost: c.whost, RegistrationToken: c.registrationToken,
 		PCFToken: c.data.pcfToken, RegistrationConfirmed: c.registrationConfirmed,
 		NDUS: c.cookies["ndus"], FinishAttempted: c.registrationFinished,
 	}
+	if c.referral != nil {
+		result.Referral = *cloneWebmasterReferral(c.referral)
+	}
+	if c.androidApp != nil {
+		profile := copyAndroidAppProfile(c.androidApp.profile)
+		result.AndroidApp = &profile
+	}
+	return result
 }
 
 // RestoreWebmasterRegistrationSession restores a saved referral flow on a fresh
@@ -151,15 +163,20 @@ func (c *Client) RestoreWebmasterRegistrationSession(saved *WebmasterRegistratio
 	if saved == nil {
 		return wrapErr(op, errors.New("registration session required"))
 	}
-	surl, err := ParseShareURL(saved.Referral.ShareURL)
-	if err != nil {
-		return wrapErr(op, err)
-	}
-	if surl != saved.Referral.ShareFromSURL || saved.Referral.ShareID <= 0 || saved.Referral.WebmasterUK <= 0 {
-		return wrapErr(op, errors.New("invalid referral metadata"))
-	}
-	if err := validateReferralSource(saved.Referral.Source); err != nil {
-		return wrapErr(op, err)
+	if saved.Referral.ShareURL != "" || saved.AndroidApp == nil {
+		surl, err := ParseShareURL(saved.Referral.ShareURL)
+		if err != nil {
+			return wrapErr(op, err)
+		}
+		if surl != saved.Referral.ShareFromSURL || saved.Referral.ShareID <= 0 || saved.Referral.WebmasterUK <= 0 {
+			return wrapErr(op, errors.New("invalid referral metadata"))
+		}
+		if err := validateReferralSource(saved.Referral.Source); err != nil {
+			return wrapErr(op, err)
+		}
+		if saved.AndroidApp != nil && saved.Referral.Source != "" && saved.Referral.Source != "share" {
+			return wrapErr(op, errors.New("saved Android referral has a Web-only source"))
+		}
 	}
 	host, err := url.Parse(saved.WebHost)
 	if err != nil {
@@ -173,7 +190,24 @@ func (c *Client) RestoreWebmasterRegistrationSession(saved *WebmasterRegistratio
 	}
 	// Reuse the established CookieString format without adding local metadata
 	// to the Cookie header. The incoming client remains untouched on failure.
-	restored := NewClient("", WithCookies(saved.Cookies))
+	var restored *Client
+	if saved.AndroidApp != nil {
+		restored, err = NewAndroidAppClient(*saved.AndroidApp, WithCookies(saved.Cookies))
+		if err != nil {
+			return wrapErr(op, err)
+		}
+		if saved.RegistrationConfirmed && saved.AndroidApp.UID == "" {
+			return wrapErr(op, errors.New("confirmed Android registration is missing its native UID"))
+		}
+		if saved.RegistrationToken != "" && saved.PCFToken == "" {
+			return wrapErr(op, errors.New("saved Android registration is missing its Hy pcftoken"))
+		}
+	} else {
+		if c.isAndroidApp() {
+			return wrapErr(op, errors.New("cannot restore a Web session onto an Android app client"))
+		}
+		restored = NewClient("", WithCookies(saved.Cookies))
+	}
 	if restored.cookies["ndus"] != saved.NDUS {
 		return wrapErr(op, errors.New("saved registration token does not match its session cookie"))
 	}
@@ -187,19 +221,33 @@ func (c *Client) RestoreWebmasterRegistrationSession(saved *WebmasterRegistratio
 	if c.cookies["ndus"] != "" || c.referral != nil || c.registrationToken != "" || c.registrationNDUS != "" {
 		return wrapErr(op, errors.New("restore requires a fresh unauthenticated client"))
 	}
+	if c.androidApp != nil && (c.androidApp.ready || saved.AndroidApp == nil ||
+		c.androidApp.profile.DeviceID != saved.AndroidApp.DeviceID || c.androidApp.profile.Version != saved.AndroidApp.Version) {
+		return wrapErr(op, errors.New("restore requires a fresh client with the same Android identity"))
+	}
 	c.cookies = restored.cookies
 	c.whost = saved.WebHost
-	c.referral = cloneWebmasterReferral(&saved.Referral)
+	if saved.Referral.ShareURL != "" {
+		c.referral = cloneWebmasterReferral(&saved.Referral)
+	}
 	c.registrationToken = saved.RegistrationToken
 	c.registrationNDUS = saved.NDUS
 	c.registrationConfirmed = saved.RegistrationConfirmed
 	c.registrationFinished = saved.FinishAttempted || saved.NDUS != ""
 	c.data = appData{logID: "0", pcfToken: saved.PCFToken}
 	c.params = accountParams{cursor: "null", spaceTotal: 1 << 30, spaceAvailable: 1 << 30}
+	if restored.androidApp != nil {
+		c.androidApp = restored.androidApp
+		c.androidApp.ready = saved.PCFToken != "" && c.androidApp.profile.PSign != ""
+		c.userAgent, c.lang = c.androidApp.profile.UserAgent, c.androidApp.profile.Language
+	}
 	return nil
 }
 
 func (c *Client) registrationHeaders() map[string]string {
+	if c.isAndroidApp() {
+		return c.androidH5Headers()
+	}
 	headers := c.passportHeaders()
 	if ref := c.WebmasterReferral(); ref != nil {
 		headers["Referer"] = ref.ShareURL
@@ -211,6 +259,12 @@ func (c *Client) registrationHeaders() map[string]string {
 // does not carry these fields in the current web client.
 func (c *Client) registrationSource(form *formValues, finishing bool) url.Values {
 	ref := c.WebmasterReferral()
+	if c.isAndroidApp() {
+		if !finishing && ref != nil {
+			form.Append("reg_source", "share")
+		}
+		return nil
+	}
 	if ref == nil {
 		return nil
 	}
@@ -240,7 +294,7 @@ func (c *Client) registrationSource(form *formValues, finishing bool) url.Values
 func (c *Client) validateReferralRegistrationToken(token string) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if c.referral == nil {
+	if c.referral == nil && c.androidApp == nil {
 		return nil
 	}
 	if c.registrationFinished {
@@ -269,7 +323,7 @@ func (c *Client) commitReferralRegistration(cookies []*http.Cookie, ndus string,
 func (c *Client) resetReferralFinishAttempt() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.referral != nil {
+	if c.referral != nil || c.androidApp != nil {
 		c.registrationFinished = false
 	}
 }

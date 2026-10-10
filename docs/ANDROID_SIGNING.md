@@ -32,13 +32,19 @@ is an empty string. No universal encrypted secret was found in the APK.
 
 The native `handler_url` at `0x9c92c` does the following:
 
-1. Returns the original URL if its existing `rand` parameter matches the
+1. Reads the Java `getSK()` and `getDeviceID()` values, returning the original
+   URL when either string is empty. The encoded SK string is checked before
+   decryption: a nonempty value decrypting to a leading NUL still passes this
+   guard. The empty-SK/device branches at `0x9cb4c`/`0x9cb60` lead to the
+   original-URL return at `0x9d994`. JNI method-name literals at `0x5f440` and
+   `0x5f922` identify `getSK` and `getDeviceID`, respectively.
+2. Returns the original URL if its existing `rand` parameter matches the
    native regex `[?|&]rand=(.*?)&` after appending a temporary `&` to the search
    input. Even an explicitly empty `rand=` is retained.
-2. Extracts nonempty `time` and `version` with equivalent raw-URL regexes.
+3. Extracts nonempty `time` and `version` with equivalent raw-URL regexes.
    It does not percent-decode these values. If either is missing or empty,
    the URL is returned unchanged.
-3. Computes the digest below and appends `&rand=<digest>` to the original URL.
+4. Computes the digest below and appends `&rand=<digest>` to the original URL.
 
 ```text
 secret = RC4(key = JNI_MUTF8(uid), data = StandardBase64Decode(net_param_sk))
@@ -61,6 +67,13 @@ The ARM32 Thumb `get_sk` at `0x269ec` corroborates the Base64/RC4 operation.
 `get_url_parameters` exists at `0x910f8`, but is not called by this handler.
 The active path neither sorts all URL parameters nor adds a generic `sign`
 field, contrary to the report's model.
+
+The missing-SK branch does not calculate a digest with an empty secret. In
+the app H5 `getRand` bridge, an unchanged URL has no rand query property;
+the JSON helper removes the null result, and the bundled H5 wrapper defaults
+that absent value to `0`. This explicit bridge path can therefore supply
+`rand=0` to passport H5 requests despite the general interceptor exclusion.
+It is separate from the SDK's `get_rand` pure calculation.
 
 The app's `time` source is epoch **milliseconds**. In `classes12.dex`,
 `pu._____.__()` normally uses `System.currentTimeMillis()` and can use an
@@ -115,6 +128,9 @@ client := terabox.NewClient(ndus, terabox.WithAndroidSigner(signer))
 ```
 
 These variables are runtime values from the relevant app/account configuration.
+An empty `EncodedSK` is accepted for an otherwise valid signer and makes
+`SignURL` preserve the URL. Device ID and UID remain required by this SDK
+constructor; the anonymous app H5 profile is a separate protocol surface.
 The channel is the app's `android_<release>_<model>_bd-dubox_<build-channel>`
 value. It is required for HTTP integration. A pure `SignURL` calculation does
 not require a channel. Version defaults to the inspected APK's `4.26.5`;
@@ -156,7 +172,8 @@ and hexadecimal formatting are modeled by explicit stubs.
 SDK vectors execute the original SDK function. Legacy vectors execute that
 same native digest path with the certificate suffix replaced by the legacy
 constant; they verify the equivalent preimage calculation, not execution of
-`handler_url` itself. Legacy URL parsing and Java wiring were checked through
+`handler_url` itself. The Go legacy-vector tests call the digest helper directly.
+Legacy URL parsing, the encoded-SK guard, and Java wiring were checked through
 disassembly/DEX and dedicated Go tests.
 
 To regenerate without contacting the service, use an analysis Python environment

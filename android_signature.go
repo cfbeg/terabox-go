@@ -41,12 +41,13 @@ type AndroidSigningConfig struct {
 // AndroidSigner implements the URLHandler native path whose Java invocation
 // was found in APK 4.26.5. It is immutable and safe for concurrent use.
 type AndroidSigner struct {
-	deviceID  string
-	uid       string
-	version   string
-	secret    []byte
-	channel   string
-	userAgent string
+	deviceID         string
+	uid              string
+	version          string
+	secret           []byte
+	encodedSKPresent bool
+	channel          string
+	userAgent        string
 }
 
 // NewAndroidSigner validates the app's runtime signing configuration and
@@ -61,16 +62,20 @@ func NewAndroidSigner(cfg AndroidSigningConfig) (*AndroidSigner, error) {
 			return nil, wrapErr(op, fmt.Errorf("%s must be nonempty valid UTF-8", name))
 		}
 	}
-	secret, err := DecodeAndroidSK(cfg.UID, cfg.EncodedSK)
-	if err != nil {
-		return nil, wrapErr(op, err)
+	var secret []byte
+	if cfg.EncodedSK != "" {
+		var err error
+		secret, err = DecodeAndroidSK(cfg.UID, cfg.EncodedSK)
+		if err != nil {
+			return nil, wrapErr(op, err)
+		}
 	}
 	if !utf8.ValidString(cfg.Channel) || strings.ContainsAny(cfg.Channel, "\r\n") ||
 		strings.ContainsAny(cfg.UserAgent, "\r\n") {
 		return nil, wrapErr(op, errors.New("channel and User-Agent must not contain line breaks; channel must be valid UTF-8"))
 	}
 	return &AndroidSigner{deviceID: cfg.DeviceID, uid: cfg.UID, version: cfg.Version,
-		secret: secret, channel: cfg.Channel, userAgent: cfg.UserAgent}, nil
+		secret: secret, encodedSKPresent: cfg.EncodedSK != "", channel: cfg.Channel, userAgent: cfg.UserAgent}, nil
 }
 
 var (
@@ -79,7 +84,8 @@ var (
 	androidVersionPattern = regexp.MustCompile(`[?|&]version=(.*?)&`)
 )
 
-// SignURL mirrors URLHandler.handlerURL: an existing rand is retained;
+// SignURL mirrors URLHandler.handlerURL: absent net_param_sk leaves the URL
+// unchanged. With a configured SK, an existing rand is retained;
 // otherwise a 40-character rand is appended when nonempty time and version
 // parameters exist. The native regex uses raw URL values, without decoding or
 // sorting other parameters. This method does not inject a separate sign field.
@@ -99,6 +105,11 @@ func (s *AndroidSigner) SignURL(rawURL, ndus string) (string, error) {
 	if (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || u.Fragment != "" {
 		return "", wrapErr(op, errors.New("absolute HTTP(S) URL without userinfo or fragment required"))
 	}
+	// The native handler checks the encoded Java getSK() string before URL
+	// parsing. A nonempty SK decrypting to a leading NUL still passes this gate.
+	if !s.encodedSKPresent {
+		return rawURL, nil
+	}
 	// JNI returns Modified UTF-8, so regex capture and digest inputs use those
 	// bytes. The original Go URL is retained for its equivalent wire encoding.
 	search := string(androidJNIBytes(rawURL)) + "&"
@@ -110,14 +121,20 @@ func (s *AndroidSigner) SignURL(rawURL, ndus string) (string, error) {
 	if len(timestamp) < 2 || timestamp[1] == "" || len(version) < 2 || version[1] == "" {
 		return rawURL, nil
 	}
+	return rawURL + "&rand=" + androidLegacyRand(s.deviceID, s.uid, s.secret, []byte(timestamp[1]), []byte(version[1]), ndus), nil
+}
+
+// androidLegacyRand is the digest calculation after URLHandler's guards. The
+// SDK-based legacy oracle vectors test this calculation separately from gates.
+func androidLegacyRand(deviceID, uid string, secret, timestamp, version []byte, ndus string) string {
 	inner := androidSHA1(androidJNIBytes(ndus))
-	data := append([]byte(inner), androidJNIBytes(s.uid)...)
-	data = append(data, s.secret...)
-	data = append(data, timestamp[1]...)
-	data = append(data, androidJNIBytes(s.deviceID)...)
-	data = append(data, version[1]...)
+	data := append([]byte(inner), androidJNIBytes(uid)...)
+	data = append(data, secret...)
+	data = append(data, timestamp...)
+	data = append(data, androidJNIBytes(deviceID)...)
+	data = append(data, version...)
 	data = append(data, androidLegacySuffix...)
-	return rawURL + "&rand=" + androidSHA1(data), nil
+	return androidSHA1(data)
 }
 
 // AndroidSDKRandInput contains the six strings, in JNI declaration order,

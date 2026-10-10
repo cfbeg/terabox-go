@@ -106,6 +106,8 @@ type PublicKeyResponse struct {
 	Data struct {
 		PP1 string `json:"pp1"`
 		PP2 string `json:"pp2"`
+		PP3 string `json:"pp3"`
+		PP4 string `json:"pp4"`
 	} `json:"data"`
 }
 
@@ -119,6 +121,9 @@ type PassportInfoResponse struct {
 
 // passportForm returns the common form fields for passport calls.
 func (c *Client) passportForm() *formValues {
+	if c.isAndroidApp() {
+		return c.androidH5Form()
+	}
 	data := c.dataSnapshot()
 	f := newForm()
 	f.Append("client", "web")
@@ -146,7 +151,11 @@ func extractNDUS(r *http.Response) string {
 // PassportPreLogin initiates the password login flow.
 func (c *Client) PassportPreLogin(ctx context.Context, email string) (*PreLoginResponse, error) {
 	const op = "passportPreLogin"
-	if c.dataSnapshot().pcfToken == "" {
+	if c.isAndroidApp() {
+		if err := c.ensureAndroidApp(ctx); err != nil {
+			return nil, wrapErr(op, err)
+		}
+	} else if c.dataSnapshot().pcfToken == "" {
 		if _, err := c.UpdateAppData(ctx, "wap/outlogin/login"); err != nil {
 			return nil, wrapErr(op, err)
 		}
@@ -154,9 +163,13 @@ func (c *Client) PassportPreLogin(ctx context.Context, email string) (*PreLoginR
 
 	form := c.passportForm()
 	form.Append("email", email)
+	if profile := c.AndroidAppProfile(); profile != nil {
+		page, _ := url.Parse(profile.PageURL)
+		form.Append("pass_logid", page.Query().Get("logId"))
+	}
 
 	var resp PreLoginResponse
-	err := c.doJSON(ctx, op, &requestOpts{
+	err := c.doPassportJSON(ctx, op, &requestOpts{
 		method:  http.MethodPost,
 		path:    "/passport/prelogin",
 		form:    form,
@@ -202,6 +215,9 @@ func (c *Client) PassportLogin(ctx context.Context, pre *PreLoginResponse, email
 	seval := pre.SevalVal()
 	random := pre.RandomVal()
 	prand := PRandGen("web", seval, encpwd, email, browserid, random)
+	if profile := c.AndroidAppProfile(); profile != nil {
+		prand = androidLoginPRand(pre, email, encpwd, profile.DeviceID)
+	}
 
 	form := c.passportForm()
 	form.Append("prand", prand)
@@ -210,16 +226,29 @@ func (c *Client) PassportLogin(ctx context.Context, pre *PreLoginResponse, email
 	form.Append("seval", seval)
 	form.Append("random", random)
 	form.Append("timestamp", strconv.FormatInt(pre.TimestampVal(), 10))
+	if profile := c.AndroidAppProfile(); profile != nil {
+		page, _ := url.Parse(profile.PageURL)
+		form.Append("vcode", "")
+		form.Append("vcode_str", "")
+		form.Append("pass_logid", page.Query().Get("logId"))
+		form.Append("g_identity", "")
+		form.Append("identity", "")
+		form.Append("op_type", "2")
+		form.Append("membership_info", "1")
+		form.Append("choose_email", "0")
+	}
 
 	var resp PassportResponse
 	var ndus string
-	err = c.doJSON(ctx, op, &requestOpts{
+	var pendingCookies []*http.Cookie
+	err = c.doPassportJSON(ctx, op, &requestOpts{
 		method:  http.MethodPost,
 		path:    "/passport/login",
 		form:    form,
 		headers: c.passportHeaders(),
 		onResponse: func(r *http.Response) {
 			ndus = extractNDUS(r)
+			pendingCookies = r.Cookies()
 		},
 	}, &resp)
 	if err != nil {
@@ -229,6 +258,18 @@ func (c *Client) PassportLogin(ctx context.Context, pre *PreLoginResponse, email
 		return nil, chErr
 	}
 	if resp.Code == 0 {
+		if c.isAndroidApp() && resp.Errno == 0 {
+			var uid string
+			ndus, uid, err = androidFinishIdentity(&resp, ndus)
+			if err != nil {
+				return &resp, wrapErr(op, err)
+			}
+			c.mu.Lock()
+			mergeCookieValues(c.cookies, pendingCookies)
+			c.cookies["ndus"] = ndus
+			c.androidApp.profile.UID = uid
+			c.mu.Unlock()
+		}
 		resp.NDUS = ndus
 	}
 	return &resp, nil
@@ -245,12 +286,16 @@ func (c *Client) RegisterSendCode(ctx context.Context, email string) (*PassportR
 	c.registrationMu.Lock()
 	defer c.registrationMu.Unlock()
 	c.mu.RLock()
-	completed := c.referral != nil && c.registrationFinished
+	completed := (c.referral != nil || c.androidApp != nil) && c.registrationFinished
 	c.mu.RUnlock()
 	if completed {
 		return nil, wrapErr(op, fmt.Errorf("registration already returned a session; retry only the referral transfer"))
 	}
-	if c.dataSnapshot().pcfToken == "" {
+	if c.isAndroidApp() {
+		if err := c.ensureAndroidApp(ctx); err != nil {
+			return nil, wrapErr(op, err)
+		}
+	} else if c.dataSnapshot().pcfToken == "" {
 		page := "wap/outlogin/emailRegister"
 		if ref := c.WebmasterReferral(); ref != nil {
 			page += "?referrer=" + url.QueryEscape(ref.ShareURL)
@@ -262,11 +307,16 @@ func (c *Client) RegisterSendCode(ctx context.Context, email string) (*PassportR
 
 	form := c.passportForm()
 	form.Append("email", email)
+	if c.isAndroidApp() {
+		form.Append("op_type", "1")
+		form.Append("choose_email", "0")
+		form.Append("g_identity", "")
+	}
 	query := c.registrationSource(form, false)
 
 	var resp PassportResponse
 	var pendingCookies []*http.Cookie
-	err := c.doJSON(ctx, op, &requestOpts{
+	err := c.doPassportJSON(ctx, op, &requestOpts{
 		method:     http.MethodPost,
 		path:       "/passport/register_v4/sendcode",
 		query:      query,
@@ -280,7 +330,7 @@ func (c *Client) RegisterSendCode(ctx context.Context, email string) (*PassportR
 	if chErr := c.maybeChallenge(&resp, false); chErr != nil {
 		return nil, chErr
 	}
-	if c.WebmasterReferral() != nil && resp.Code == 0 && resp.Errno == 0 {
+	if c.registrationSessionTracked() && resp.Code == 0 && resp.Errno == 0 {
 		if !resp.codePresent {
 			return &resp, wrapErr(op, fmt.Errorf("registration response is missing code"))
 		}
@@ -308,10 +358,15 @@ func (c *Client) RegisterVerify(ctx context.Context, regToken, code string) (*Pa
 	form := c.passportForm()
 	form.Append("token", regToken)
 	form.Append("code", code)
+	if c.isAndroidApp() {
+		form.Append("skip_code", "0")
+		form.Append("support_unify", "1")
+		form.Append("g_identity", "")
+	}
 
 	var resp PassportResponse
 	var pendingCookies []*http.Cookie
-	err := c.doJSON(ctx, op, &requestOpts{
+	err := c.doPassportJSON(ctx, op, &requestOpts{
 		method:     http.MethodPost,
 		path:       "/passport/register_v4/verify",
 		form:       form,
@@ -324,7 +379,7 @@ func (c *Client) RegisterVerify(ctx context.Context, regToken, code string) (*Pa
 	if chErr := c.maybeChallenge(&resp, false); chErr != nil {
 		return nil, chErr
 	}
-	if c.WebmasterReferral() != nil && resp.Code == 0 && resp.Errno == 0 {
+	if c.registrationSessionTracked() && resp.Code == 0 && resp.Errno == 0 {
 		if !resp.codePresent {
 			return &resp, wrapErr(op, fmt.Errorf("verification response is missing code"))
 		}
@@ -353,7 +408,11 @@ func (c *Client) RegisterFinish(ctx context.Context, regToken, password string) 
 			break
 		}
 	}
-	if len(password) < 6 || len(password) > 15 || !hasLetter {
+	validPassword := len(password) >= 6 && len(password) <= 15 && hasLetter
+	if c.isAndroidApp() {
+		validPassword = androidPasswordValid(password)
+	}
+	if !validPassword {
 		return &PassportResponse{Code: -2, LogID: 0, Msg: "invalid password"}, nil
 	}
 
@@ -376,6 +435,10 @@ func (c *Client) RegisterFinish(ctx context.Context, regToken, password string) 
 	form := c.passportForm()
 	form.Append("token", regToken)
 	form.Append("pwd", encpwd)
+	if c.isAndroidApp() {
+		form.Append("g_identity", "")
+		form.Append("access_token", "")
+	}
 	query := c.registrationSource(form, true)
 
 	var resp PassportResponse
@@ -384,12 +447,12 @@ func (c *Client) RegisterFinish(ctx context.Context, regToken, password string) 
 	if err := ctx.Err(); err != nil {
 		return nil, wrapErr(op, err)
 	}
-	if c.WebmasterReferral() != nil {
+	if c.registrationSessionTracked() {
 		c.mu.Lock()
 		c.registrationFinished = true
 		c.mu.Unlock()
 	}
-	err = c.doJSON(ctx, op, &requestOpts{
+	err = c.doPassportJSON(ctx, op, &requestOpts{
 		method:  http.MethodPost,
 		path:    "/passport/register_v4/finish",
 		query:   query,
@@ -404,7 +467,7 @@ func (c *Client) RegisterFinish(ctx context.Context, regToken, password string) 
 		// A returned session cookie can outlive a malformed response. Preserve
 		// it for account-status checks instead of silently repeating account
 		// creation. The response code is explicitly unknown in this case.
-		if c.WebmasterReferral() != nil && ndus != "" {
+		if c.registrationSessionTracked() && ndus != "" {
 			c.commitReferralRegistration(pendingCookies, ndus, false)
 			return &PassportResponse{Code: -1, Msg: "registration outcome unknown", NDUS: ndus}, err
 		}
@@ -414,7 +477,7 @@ func (c *Client) RegisterFinish(ctx context.Context, regToken, password string) 
 		c.resetReferralFinishAttempt()
 		return nil, chErr
 	}
-	if c.WebmasterReferral() != nil && !resp.codePresent && resp.Errno == 0 {
+	if c.registrationSessionTracked() && !resp.codePresent && resp.Errno == 0 {
 		if ndus != "" {
 			c.commitReferralRegistration(pendingCookies, ndus, false)
 		}
@@ -425,8 +488,23 @@ func (c *Client) RegisterFinish(ctx context.Context, regToken, password string) 
 		c.resetReferralFinishAttempt()
 	}
 	if resp.Code == 0 {
+		if c.isAndroidApp() && resp.Errno == 0 {
+			nativeNDUS, uid, identityErr := androidFinishIdentity(&resp, ndus)
+			if identityErr != nil {
+				if ndus != "" {
+					c.commitReferralRegistration(pendingCookies, ndus, false)
+				}
+				resp.NDUS = ndus
+				return &resp, wrapErr(op, identityErr)
+			}
+			ndus = nativeNDUS
+			pendingCookies = append(pendingCookies, &http.Cookie{Name: "ndus", Value: ndus})
+			c.mu.Lock()
+			c.androidApp.profile.UID = uid
+			c.mu.Unlock()
+		}
 		resp.NDUS = ndus
-		if resp.Errno == 0 && ndus != "" && c.WebmasterReferral() != nil {
+		if resp.Errno == 0 && ndus != "" && c.registrationSessionTracked() {
 			c.commitReferralRegistration(pendingCookies, ndus, true)
 		}
 	}
@@ -438,12 +516,21 @@ func (c *Client) RegisterFinish(ctx context.Context, regToken, password string) 
 // on this call.
 func (c *Client) GetPublicKey(ctx context.Context) (*PublicKeyResponse, error) {
 	const op = "getPublicKey"
+	method, noCookie := http.MethodGet, true
+	var form *formValues
+	if c.isAndroidApp() {
+		if err := c.ensureAndroidApp(ctx); err != nil {
+			return nil, wrapErr(op, err)
+		}
+		method, noCookie, form = http.MethodPost, false, c.androidH5Form()
+	}
 
 	var resp PublicKeyResponse
-	err := c.doJSON(ctx, op, &requestOpts{
-		method:   http.MethodGet,
+	err := c.doPassportJSON(ctx, op, &requestOpts{
+		method:   method,
 		path:     "/passport/getpubkey",
-		noCookie: true,
+		noCookie: noCookie,
+		form:     form,
 	}, &resp)
 	if err != nil {
 		return nil, err

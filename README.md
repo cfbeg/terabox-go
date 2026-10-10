@@ -160,6 +160,42 @@ between Android and Web endpoints and the primary-source evidence.
 
 ## Android native signing
 
+`NewAndroidAppClient(profile, options...)` uses the APK's Android Hy email
+registration and native shared-file requests. Load `AndroidAppProfile` from an
+actual app capture: CUID, version, User-Agent, native channel, language, client
+type, Hy page URL, and the complete `NativeParams`/`LegacyNativeParams` query
+maps. The constructor does not contact TeraBox or generate a device identity.
+Guest UID and encrypted SK can be empty. Ordinary `NewClient` remains the Web
+client.
+
+```go
+client, err := terabox.NewAndroidAppClient(profile)
+if err != nil {
+	return err
+}
+// The Android shared-page source is "share", rather than the Web dialog source.
+referral, err := client.PrepareWebmasterReferral(ctx, shareURL)
+if err != nil {
+	return err
+}
+_ = referral // Select files explicitly if a subsequent transfer is requested.
+// RegisterSendCode -> RegisterVerify -> RegisterFinish use the same app client.
+// Persist WebmasterRegistrationSession() before Finish and after its outcome.
+```
+
+The app path fetches its captured `/wap/hylogin` page for PCF/cookies, uses
+native psign bootstrap and POST public-key requests, and accepts finish
+`data.ndus` plus the separate native `data.userid`. Its snapshots retain app
+identity even without a referral; fresh `RestoreWebmasterRegistrationSession`
+restores that protocol. App mode never bootstraps through `/main` or the Web
+`/wap/outlogin` pages. See [the APK request contract](docs/ANDROID_APP.md).
+
+After persisting a successful app registration, `RefreshAndroidAppConfig(ctx)`
+uses captured `ReportParams` and that account's native UID/NDUS to obtain its
+encoded signing key through native ReportUser. Save the updated session before
+transferring files. A refresh error leaves the registered account intact and
+can be retried independently from registration.
+
 `NewAndroidSigner` and `WithAndroidSigner` enable the APK-verified URLHandler
 signature on API requests and chunk uploads. Supply the app's runtime device
 ID, account UID, encrypted `net_param_sk`, and channel; these values cannot be

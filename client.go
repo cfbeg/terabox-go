@@ -87,6 +87,7 @@ type Client struct {
 	registrationConfirmed bool
 	registrationFinished  bool
 	androidSigner         *AndroidSigner
+	androidApp            *androidAppState
 }
 
 // Option configures a Client.
@@ -382,6 +383,12 @@ func (c *Client) doHTTP(req *http.Request, timeout time.Duration) (*http.Respons
 		if cancel != nil {
 			cancel()
 		}
+		if c.isAndroidApp() {
+			var requestErr *url.Error
+			if errors.As(err, &requestErr) {
+				err = fmt.Errorf("Android app HTTP %s: %w", requestErr.Op, requestErr.Err)
+			}
+		}
 		return nil, err
 	}
 	if cancel != nil {
@@ -448,6 +455,10 @@ type requestOpts struct {
 // Non-200 statuses become *httpStatusError wrapped in *Error.
 func (c *Client) doJSON(ctx context.Context, op string, ro *requestOpts, out any) error {
 	req, err := c.newRequest(ctx, ro)
+	if err != nil {
+		return wrapErr(op, err)
+	}
+	req, err = c.androidAppAPIRequest(req)
 	if err != nil {
 		return wrapErr(op, err)
 	}
@@ -565,6 +576,17 @@ func extractTemplateData(page string) string {
 // empty means "/main".
 func (c *Client) UpdateAppData(ctx context.Context, customPath string) (*TemplateData, error) {
 	const op = "updateAppData"
+	if c.isAndroidApp() {
+		path := "/" + strings.TrimPrefix(customPath, "/")
+		if path != "/wap/hylogin" && !strings.HasPrefix(path, "/wap/hylogin/") {
+			return nil, wrapErr(op, errors.New("Android app clients require their captured Hy page, not a Web page"))
+		}
+		if err := c.ensureAndroidApp(ctx); err != nil {
+			return nil, wrapErr(op, err)
+		}
+		data := c.dataSnapshot()
+		return &TemplateData{PcfToken: data.pcfToken, JsToken: data.jsToken}, nil
+	}
 	const maxAttempts = 5 // 1 try + 4 retries on timeout (JS: retries=4)
 
 	var lastErr error
@@ -740,6 +762,9 @@ func (c *Client) updateAppDataOnce(ctx context.Context, customPath string) (*Tem
 // ensureJSToken makes sure a jsToken is available, calling UpdateAppData
 // when necessary.
 func (c *Client) ensureJSToken(ctx context.Context) error {
+	if c.isAndroidApp() {
+		return nil
+	}
 	c.mu.RLock()
 	need := c.data.jsToken == ""
 	c.mu.RUnlock()

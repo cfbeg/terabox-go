@@ -77,12 +77,13 @@ func TestAndroidSignatureNativeOracleVectors(t *testing.T) {
 				})
 			case "legacy":
 				// The oracle executes SDK digest machinery with the legacy
-				// suffix. URL-handler parsing is tested separately below.
-				signer := androidSignatureSigner(t, AndroidSigningConfig{DeviceID: vector.DeviceID, UID: vector.UID, EncodedSK: vector.EncodedSK, Version: vector.Version})
-				unsigned := "https://www.terabox.com/api/list?z=keep%2F+value&time=" + vector.Time + "&version=" + vector.Version + "&a=first&a=second"
-				var signed string
-				signed, err = signer.SignURL(unsigned, vector.NDUS)
-				got = strings.TrimPrefix(signed, unsigned+"&rand=")
+				// suffix. It does not execute URLHandler's missing-SK guard
+				// or URL parsing; those have dedicated regression tests.
+				var secret []byte
+				secret, err = DecodeAndroidSK(vector.UID, vector.EncodedSK)
+				if err == nil {
+					got = androidLegacyRand(vector.DeviceID, vector.UID, secret, androidJNIBytes(vector.Time), androidJNIBytes(vector.Version), vector.NDUS)
+				}
 			default:
 				t.Fatalf("unknown native oracle algorithm %q", vector.Algorithm)
 			}
@@ -105,6 +106,27 @@ func TestAndroidSignatureNativeOracleVectors(t *testing.T) {
 	}
 	if len(fixtures.SKVectors) != 8 {
 		t.Fatalf("SK oracle coverage = %d, want 8 vectors", len(fixtures.SKVectors))
+	}
+}
+
+func TestAndroidSignURLMissingSKGateUsesEncodedValue(t *testing.T) {
+	const raw = "https://www.terabox.com/api/list?time=1700000000123&version=4.26.5"
+	cfg := androidSignatureConfig()
+	cfg.EncodedSK = ""
+	signer := androidSignatureSigner(t, cfg)
+	if got, err := signer.SignURL(raw, "ndus-ascii"); err != nil || got != raw {
+		t.Fatalf("native missing-SK gate must preserve the URL: got=%q error=%v", got, err)
+	}
+	// This nonempty encrypted value decodes to a secret beginning with NUL.
+	// URLHandler gates on the Java encoded value, not the decoded secret length.
+	cfg.UID, cfg.EncodedSK = "key", "CxhVhEg="
+	signer = androidSignatureSigner(t, cfg)
+	if len(signer.secret) != 0 {
+		t.Fatalf("leading-NUL fixture decoded to %x, want empty", signer.secret)
+	}
+	got, err := signer.SignURL(raw, "ndus-ascii")
+	if err != nil || !strings.HasPrefix(got, raw+"&rand=") || len(strings.TrimPrefix(got, raw+"&rand=")) != 40 {
+		t.Fatalf("nonempty encoded SK must pass the guard: got=%q error=%v", got, err)
 	}
 }
 

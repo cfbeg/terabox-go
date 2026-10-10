@@ -92,6 +92,10 @@ type ShareTransferOptions struct {
 }
 
 func (c *Client) shareQuery() url.Values {
+	if c.isAndroidApp() {
+		// The native common-query builder is applied by androidAppAPIRequest.
+		return url.Values{}
+	}
 	query := c.appQuery()
 	data := c.dataSnapshot()
 	if data.jsToken != "" {
@@ -112,7 +116,12 @@ func (c *Client) GetShareInfo(ctx context.Context, surl string) (*ShareInfoRespo
 	query := c.shareQuery()
 	query.Set("shorturl", "1"+surl)
 	query.Set("root", "1")
-	query.Set("scene", "")
+	if c.isAndroidApp() {
+		query.Set("type", "0")
+		query.Set("bot_uk", "")
+	} else {
+		query.Set("scene", "")
+	}
 	return c.getShareMetadata(ctx, op, "/api/shorturlinfo", query, false)
 }
 
@@ -130,10 +139,20 @@ func (c *Client) GetShareList(ctx context.Context, surl string, page int) (*Shar
 	query := c.shareQuery()
 	query.Set("shorturl", surl)
 	query.Set("root", "1")
-	query.Set("page", strconv.Itoa(page))
-	query.Set("num", "20000")
-	query.Set("by", "name")
-	query.Set("order", "asc")
+	if c.isAndroidApp() {
+		// APK MultiShareListViewModel.y uses a zero-based root page with 100
+		// entries. Keep this public method's one-based page argument.
+		query.Set("page", strconv.Itoa(page-1))
+		query.Set("num", "100")
+		query.Set("dir", "")
+		query.Set("timestamp", strconv.FormatInt(c.androidAppTime()/1000, 10))
+		query.Set("bot_uk", "")
+	} else {
+		query.Set("page", strconv.Itoa(page))
+		query.Set("num", "20000")
+		query.Set("by", "name")
+		query.Set("order", "asc")
+	}
 	query.Set("scene", "")
 	return c.getShareMetadata(ctx, op, "/share/list", query, true)
 }
@@ -147,8 +166,10 @@ func (c *Client) getShareMetadata(ctx context.Context, op, endpoint string, quer
 	var response ShareInfoResponse
 	var pendingCookies []*http.Cookie
 	headers := c.registrationHeaders()
-	headers["Accept"] = "application/json, text/plain, */*"
-	headers["X-Requested-With"] = "XMLHttpRequest"
+	if !c.isAndroidApp() {
+		headers["Accept"] = "application/json, text/plain, */*"
+		headers["X-Requested-With"] = "XMLHttpRequest"
+	}
 	err := c.doJSON(ctx, op, &requestOpts{
 		method:     http.MethodGet,
 		path:       endpoint,
@@ -184,26 +205,46 @@ func (c *Client) TransferShare(ctx context.Context, shareID, ownerUK int64, fsID
 	if err != nil {
 		return nil, wrapErr(op, err)
 	}
-	if err := c.ensureJSToken(ctx); err != nil {
-		return nil, wrapErr(op, err)
+	android := c.isAndroidApp()
+	if !android {
+		if err := c.ensureJSToken(ctx); err != nil {
+			return nil, wrapErr(op, err)
+		}
 	}
 	query := c.shareQuery()
 	query.Set("shareid", strconv.FormatInt(shareID, 10))
 	query.Set("from", strconv.FormatInt(ownerUK, 10))
-	query.Set("ondup", onDup)
-	query.Set("async", "1")
-	query.Set("bdstoken", c.dataSnapshot().bdsToken)
+	if android {
+		query.Set("bot_uk", "")
+	} else {
+		query.Set("ondup", onDup)
+		query.Set("async", "1")
+		query.Set("bdstoken", c.dataSnapshot().bdsToken)
+	}
 	fileIDs, err := json.Marshal(fsIDs)
 	if err != nil {
 		return nil, wrapErr(op, err)
 	}
 	form := newForm()
-	form.Append("fsidlist", string(fileIDs))
+	if android {
+		// The APK caller serializes Java List<Long>.toString(), including the
+		// space between IDs. async/ondup are @Field values in native IApi.d.
+		form.Append("fsidlist", strings.ReplaceAll(string(fileIDs), ",", ", "))
+		form.Append("async", "1")
+		form.Append("ondup", onDup)
+		for key, value := range c.AndroidAppProfile().NativeCKData {
+			form.Append(key, value)
+		}
+	} else {
+		form.Append("fsidlist", string(fileIDs))
+	}
 	form.Append("path", dest)
 	var response ShareTransferResponse
 	headers := c.registrationHeaders()
-	headers["Accept"] = "application/json, text/plain, */*"
-	headers["X-Requested-With"] = "XMLHttpRequest"
+	if !android {
+		headers["Accept"] = "application/json, text/plain, */*"
+		headers["X-Requested-With"] = "XMLHttpRequest"
+	}
 	err = c.doJSON(ctx, op, &requestOpts{
 		method:  http.MethodPost,
 		path:    "/share/transfer",
