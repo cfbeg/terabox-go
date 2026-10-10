@@ -72,14 +72,20 @@ type Client struct {
 	lang      string
 	userAgent string
 
-	mu             sync.RWMutex
-	fileDiffMu     sync.Mutex
-	cookies        map[string]string
-	trustedOrigins map[string]struct{}
-	whost          string
-	uhost          string
-	data           appData
-	params         accountParams
+	mu                    sync.RWMutex
+	fileDiffMu            sync.Mutex
+	cookies               map[string]string
+	trustedOrigins        map[string]struct{}
+	whost                 string
+	uhost                 string
+	data                  appData
+	params                accountParams
+	registrationMu        sync.Mutex
+	referral              *WebmasterReferral
+	registrationToken     string
+	registrationNDUS      string
+	registrationConfirmed bool
+	registrationFinished  bool
 }
 
 // Option configures a Client.

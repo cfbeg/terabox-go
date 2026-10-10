@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 )
@@ -75,7 +76,27 @@ type PassportResponse struct {
 	CanSkipCode int    `json:"can_skip_code"`
 	// NDUS is extracted from the Set-Cookie header on successful
 	// PassportLogin / RegisterFinish calls.
-	NDUS string `json:"-"`
+	NDUS        string `json:"-"`
+	codePresent bool
+}
+
+// UnmarshalJSON records whether the passport result code was actually supplied.
+// Referral registration needs that distinction before accepting a new session.
+func (r *PassportResponse) UnmarshalJSON(b []byte) error {
+	type plain PassportResponse
+	var wire struct {
+		plain
+		Code *int `json:"code"`
+	}
+	if err := json.Unmarshal(b, &wire); err != nil {
+		return err
+	}
+	*r = PassportResponse(wire.plain)
+	if wire.Code != nil {
+		r.Code = *wire.Code
+		r.codePresent = true
+	}
+	return nil
 }
 
 // PublicKeyResponse is the /passport/getpubkey result.
@@ -217,29 +238,59 @@ func (c *Client) PassportLogin(ctx context.Context, pre *PreLoginResponse, email
 // Code semantics: 0 OK, 10 invalid email, 11 already registered,
 // 60 too fast (wait ~60s). On success the registration token is in
 // resp.Token; pass it to RegisterVerify / RegisterFinish.
+// A prepared WebmasterReferral adds the shared-page registration source
+// and retains server cookies for the remaining steps.
 func (c *Client) RegisterSendCode(ctx context.Context, email string) (*PassportResponse, error) {
 	const op = "regSendCode"
+	c.registrationMu.Lock()
+	defer c.registrationMu.Unlock()
+	c.mu.RLock()
+	completed := c.referral != nil && c.registrationFinished
+	c.mu.RUnlock()
+	if completed {
+		return nil, wrapErr(op, fmt.Errorf("registration already returned a session; retry only the referral transfer"))
+	}
 	if c.dataSnapshot().pcfToken == "" {
-		if _, err := c.UpdateAppData(ctx, "wap/outlogin/emailRegister"); err != nil {
+		page := "wap/outlogin/emailRegister"
+		if ref := c.WebmasterReferral(); ref != nil {
+			page += "?referrer=" + url.QueryEscape(ref.ShareURL)
+		}
+		if _, err := c.UpdateAppData(ctx, page); err != nil {
 			return nil, wrapErr(op, err)
 		}
 	}
 
 	form := c.passportForm()
 	form.Append("email", email)
+	query := c.registrationSource(form, false)
 
 	var resp PassportResponse
+	var pendingCookies []*http.Cookie
 	err := c.doJSON(ctx, op, &requestOpts{
-		method:  http.MethodPost,
-		path:    "/passport/register_v4/sendcode",
-		form:    form,
-		headers: c.passportHeaders(),
+		method:     http.MethodPost,
+		path:       "/passport/register_v4/sendcode",
+		query:      query,
+		form:       form,
+		headers:    c.registrationHeaders(),
+		onResponse: func(r *http.Response) { pendingCookies = r.Cookies() },
 	}, &resp)
 	if err != nil {
 		return nil, err
 	}
 	if chErr := c.maybeChallenge(&resp, false); chErr != nil {
 		return nil, chErr
+	}
+	if c.WebmasterReferral() != nil && resp.Code == 0 && resp.Errno == 0 {
+		if !resp.codePresent {
+			return &resp, wrapErr(op, fmt.Errorf("registration response is missing code"))
+		}
+		if resp.Token == "" {
+			return &resp, wrapErr(op, fmt.Errorf("registration response is missing token"))
+		}
+		c.mu.Lock()
+		mergeCookieValues(c.cookies, pendingCookies)
+		c.registrationToken = resp.Token
+		c.mu.Unlock()
 	}
 	return &resp, nil
 }
@@ -248,17 +299,24 @@ func (c *Client) RegisterSendCode(ctx context.Context, email string) (*PassportR
 // Code semantics: 0 OK, 58/59 wrong email code (58 observed live).
 func (c *Client) RegisterVerify(ctx context.Context, regToken, code string) (*PassportResponse, error) {
 	const op = "regVerify"
+	c.registrationMu.Lock()
+	defer c.registrationMu.Unlock()
+	if err := c.validateReferralRegistrationToken(regToken); err != nil {
+		return nil, wrapErr(op, err)
+	}
 
 	form := c.passportForm()
 	form.Append("token", regToken)
 	form.Append("code", code)
 
 	var resp PassportResponse
+	var pendingCookies []*http.Cookie
 	err := c.doJSON(ctx, op, &requestOpts{
-		method:  http.MethodPost,
-		path:    "/passport/register_v4/verify",
-		form:    form,
-		headers: c.passportHeaders(),
+		method:     http.MethodPost,
+		path:       "/passport/register_v4/verify",
+		form:       form,
+		headers:    c.registrationHeaders(),
+		onResponse: func(r *http.Response) { pendingCookies = r.Cookies() },
 	}, &resp)
 	if err != nil {
 		return nil, err
@@ -266,14 +324,27 @@ func (c *Client) RegisterVerify(ctx context.Context, regToken, code string) (*Pa
 	if chErr := c.maybeChallenge(&resp, false); chErr != nil {
 		return nil, chErr
 	}
+	if c.WebmasterReferral() != nil && resp.Code == 0 && resp.Errno == 0 {
+		if !resp.codePresent {
+			return &resp, wrapErr(op, fmt.Errorf("verification response is missing code"))
+		}
+		c.mergeCookies(pendingCookies)
+	}
 	return &resp, nil
 }
 
 // RegisterFinish completes registration by setting the account password
 // (6-15 characters, at least one Latin letter). On success resp.NDUS
-// contains the ndus token; create a new client with it.
+// contains the ndus token; create a new client with it. For a prepared
+// WebmasterReferral the client also retains the authenticated session;
+// use RegisterFinishWithReferral to additionally submit a shared transfer.
 func (c *Client) RegisterFinish(ctx context.Context, regToken, password string) (*PassportResponse, error) {
 	const op = "regFinish"
+	c.registrationMu.Lock()
+	defer c.registrationMu.Unlock()
+	if err := c.validateReferralRegistrationToken(regToken); err != nil {
+		return nil, wrapErr(op, err)
+	}
 	hasLetter := false
 	for i := 0; i < len(password); i++ {
 		ch := password[i]
@@ -305,26 +376,59 @@ func (c *Client) RegisterFinish(ctx context.Context, regToken, password string) 
 	form := c.passportForm()
 	form.Append("token", regToken)
 	form.Append("pwd", encpwd)
+	query := c.registrationSource(form, true)
 
 	var resp PassportResponse
 	var ndus string
+	var pendingCookies []*http.Cookie
+	if err := ctx.Err(); err != nil {
+		return nil, wrapErr(op, err)
+	}
+	if c.WebmasterReferral() != nil {
+		c.mu.Lock()
+		c.registrationFinished = true
+		c.mu.Unlock()
+	}
 	err = c.doJSON(ctx, op, &requestOpts{
 		method:  http.MethodPost,
 		path:    "/passport/register_v4/finish",
+		query:   query,
 		form:    form,
-		headers: c.passportHeaders(),
+		headers: c.registrationHeaders(),
 		onResponse: func(r *http.Response) {
 			ndus = extractNDUS(r)
+			pendingCookies = r.Cookies()
 		},
 	}, &resp)
 	if err != nil {
+		// A returned session cookie can outlive a malformed response. Preserve
+		// it for account-status checks instead of silently repeating account
+		// creation. The response code is explicitly unknown in this case.
+		if c.WebmasterReferral() != nil && ndus != "" {
+			c.commitReferralRegistration(pendingCookies, ndus, false)
+			return &PassportResponse{Code: -1, Msg: "registration outcome unknown", NDUS: ndus}, err
+		}
 		return nil, err
 	}
 	if chErr := c.maybeChallenge(&resp, false); chErr != nil {
+		c.resetReferralFinishAttempt()
 		return nil, chErr
+	}
+	if c.WebmasterReferral() != nil && !resp.codePresent && resp.Errno == 0 {
+		if ndus != "" {
+			c.commitReferralRegistration(pendingCookies, ndus, false)
+		}
+		return &PassportResponse{Code: -1, Msg: "registration outcome unknown", NDUS: ndus},
+			wrapErr(op, fmt.Errorf("registration response is missing code; check account state before retrying registration"))
+	}
+	if resp.Code != 0 || resp.Errno != 0 {
+		c.resetReferralFinishAttempt()
 	}
 	if resp.Code == 0 {
 		resp.NDUS = ndus
+		if resp.Errno == 0 && ndus != "" && c.WebmasterReferral() != nil {
+			c.commitReferralRegistration(pendingCookies, ndus, true)
+		}
 	}
 	return &resp, nil
 }

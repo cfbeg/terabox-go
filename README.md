@@ -52,6 +52,86 @@ Save `CookieString()` and restore it with `WithCookies(savedCookies)` to retain
 browser/challenge state across restarts. A successful `PassportLogin` or
 `RegisterFinish` returns `NDUS`; pass it to `NewClient` for an authenticated client.
 
+## Registration from a webmaster shared link
+
+Prepare the shared-link context on a fresh, unauthenticated client **before**
+requesting an email code. Use the same client for all registration steps:
+
+```go
+client := terabox.NewClient("")
+referral, err := client.PrepareWebmasterReferralWithOptions(ctx, shareURL,
+	&terabox.WebmasterReferralOptions{Source: "web_share"})
+if err != nil {
+	return err
+}
+sent, err := client.RegisterSendCode(ctx, email)
+if err != nil {
+	return err
+}
+if sent.Code != 0 || sent.Errno != 0 {
+	return fmt.Errorf("send code failed: code=%d errno=%d", sent.Code, sent.Errno)
+}
+
+// Obtain the verification code from the email, then continue on this client.
+verified, err := client.RegisterVerify(ctx, sent.Token, verificationCode)
+if err != nil {
+	return err
+}
+if verified.Code != 0 || verified.Errno != 0 {
+	return fmt.Errorf("verification failed: code=%d errno=%d", verified.Code, verified.Errno)
+}
+
+// Inspect referral.Files (or GetShareList) and explicitly select files to save.
+result, err := client.RegisterFinishWithReferral(ctx, sent.Token, password,
+	&terabox.WebmasterTransferOptions{
+		FSIDs: selectedFileIDs, Destination: "/", OnDup: "newcopy",
+	})
+if result != nil && result.Session != nil {
+	// Persist result.Session locally even if err != nil: registration may have
+	// succeeded while the subsequent transfer failed.
+}
+if err != nil {
+	return err
+}
+fmt.Printf("share %d, owner %d, transfer task %d\n",
+	referral.ShareID, referral.WebmasterUK, result.Transfer.TaskID)
+```
+
+The referral is opt-in; ordinary registration requests retain their existing
+behavior. Metadata is resolved through the current `/api/shorturlinfo` and
+`/share/list` APIs. Registration carries the selected shared-page `reg_source`,
+`first_referer`, HTTP Referer, and server-issued visitor cookies. On completion,
+the new NDUS is retained on the client and authenticated web tokens are refreshed
+before transferring the selected files.
+
+`PrepareWebmasterReferral` uses the default shared-page source `share`. The
+options variant can select `web_share`, as shown above: sendcode additionally
+carries `koltype=1`, while finish uses `reg_source=web_share` without `koltype`.
+`web_share_videoplay` is also supported. These are the distinct source mappings
+observed in the current Web dialog, not arbitrary attribution flags.
+
+For a restart between sending and verifying the email code, JSON-serialize
+`client.WebmasterRegistrationSession()`. Restore it with
+`freshClient.RestoreWebmasterRegistrationSession(saved)` before continuing.
+The snapshot includes cookies and the registration token, so store it as a
+credential. It does not contain the password or email verification code.
+
+`result.Registration` and `result.Transfer` describe separate operations.
+When registration succeeds but transfer fails, use
+`client.TransferWebmasterReferral(ctx, options)` to retry only the transfer.
+A malformed finish response with an NDUS retains that session with
+`RegistrationConfirmed=false`; the transfer helper checks login status before
+continuing. An ambiguous finish attempt is saved as `FinishAttempted=true` and
+blocks re-sending registration; check the account's status before taking further
+action. `OnDup` supports the verified `newcopy` policy only. Transfer task
+acceptance is distinct from completion and referral
+credit; no result field asserts that a webmaster acquisition was counted.
+
+The APK report's `share_from_surl` and `webmaster_uk` are retained in local
+referral metadata. They are not sent as unverified passport fields or invented
+cookies. See [API verification notes](docs/API_NOTES.md) for the distinction
+between Android and Web endpoints and the primary-source evidence.
+
 ## Errors and HTTP behavior
 
 - Single-request API methods return server result codes in `Errno`, `Code`,
