@@ -153,6 +153,23 @@ between Android and Web endpoints and the primary-source evidence.
   tokens, account state, or regional host changes. Login pages may refresh only
   the passport token without erasing unrelated session tokens.
 
+## Android native signing
+
+`NewAndroidSigner` and `WithAndroidSigner` enable the APK-verified URLHandler
+signature on API requests and chunk uploads. Supply the app's runtime device
+ID, account UID, encrypted `net_param_sk`, and channel; these values cannot be
+inferred from an NDUS cookie alone. The signer adds a 40-character `rand` using
+millisecond time, Base64/RC4 secret decoding, and the native SHA-1 preimage.
+
+The default client remains the existing Web client. Passport calls and HTML
+token refresh keep their existing behavior. Use `SetAndroidSigner` to replace
+the immutable profile after an account/config change or to disable it with nil.
+`ComputeAndroidSDKRand` also exposes the separately verified SDK-native digest.
+
+[Android signing documentation](docs/ANDROID_SIGNING.md) includes configuration,
+the actual formulas, corrected report assumptions, and a reproducible native
+verification script. Normal Go tests use checked-in native test vectors.
+
 ## Uploads and synchronization
 
 The upload API exposes individual steps: `HashFile`, `PrecreateFile`,

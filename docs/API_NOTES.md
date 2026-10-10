@@ -79,10 +79,12 @@ transport is a separate surface:
 - Native precreate/rapidupload uses `/rest/2.0/pcs/file` and native chunk uploads
   can use `partoffset` and `type=tmpfile`. This does not invalidate Web
   `/api/precreate`, `/api/rapidupload`, or the `uploadid`/`partseq` chunk flow.
-- The report's native URL-signature model does not contain a fully verified
-  secret-key derivation. It is not applied to Web requests as an invented
-  signature implementation. Native RC4 block-list handling is also not imposed
-  on the existing Web precreate method.
+- Subsequent native disassembly and emulation reconstructed URLHandler and
+  SDK rand signing. Opt-in Go support uses those verified calculations rather
+  than the report's simplified signature model. See
+  [Android signing](ANDROID_SIGNING.md) for formulas, runtime configuration,
+  call-site evidence, and native test vectors. Native RC4 upload block-list
+  handling remains separate from the existing Web precreate method.
 - The APK version alone does not establish the `version` parameter accepted by
   `/rest/recent/listall`. Its existing value is retained; the desktop UA is
   independent of that query parameter.

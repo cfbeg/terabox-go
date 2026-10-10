@@ -512,6 +512,10 @@ func (c *Client) UploadChunk(ctx context.Context, data *UploadData, partSeq int,
 	}
 	req.Header.Set("Content-Type", "multipart/form-data; boundary="+boundary)
 	req.ContentLength = int64(len(bodyHead)) + size + int64(len(bodyTail))
+	req, err = c.signAndroidRequest(req)
+	if err != nil {
+		return nil, wrapErr(op, err)
+	}
 
 	resp, err := c.doHTTP(req, c.uploadTimeout)
 	if err != nil {

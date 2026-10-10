@@ -86,6 +86,7 @@ type Client struct {
 	registrationNDUS      string
 	registrationConfirmed bool
 	registrationFinished  bool
+	androidSigner         *AndroidSigner
 }
 
 // Option configures a Client.
@@ -447,6 +448,10 @@ type requestOpts struct {
 // Non-200 statuses become *httpStatusError wrapped in *Error.
 func (c *Client) doJSON(ctx context.Context, op string, ro *requestOpts, out any) error {
 	req, err := c.newRequest(ctx, ro)
+	if err != nil {
+		return wrapErr(op, err)
+	}
+	req, err = c.signAndroidRequest(req)
 	if err != nil {
 		return wrapErr(op, err)
 	}
