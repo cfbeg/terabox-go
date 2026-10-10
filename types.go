@@ -102,6 +102,58 @@ type FileEntry struct {
 	Category       int    `json:"category"`
 }
 
+type fileEntryInteger Int64ish
+
+func (v *fileEntryInteger) UnmarshalJSON(b []byte) error {
+	if strings.TrimSpace(string(b)) == `""` {
+		return fmt.Errorf("file entry integer is empty")
+	}
+	value := Int64ish(*v)
+	if err := value.UnmarshalJSON(b); err != nil {
+		return err
+	}
+	*v = fileEntryInteger(value)
+	return nil
+}
+
+// UnmarshalJSON accepts the numbers or numeric strings used by public-share
+// listings while preserving FileEntry's existing integer fields and JSON output.
+func (f *FileEntry) UnmarshalJSON(b []byte) error {
+	type plain FileEntry
+	wire := struct {
+		plain
+		FSID        fileEntryInteger `json:"fs_id"`
+		Size        fileEntryInteger `json:"size"`
+		IsDir       fileEntryInteger `json:"isdir"`
+		ServerCTime fileEntryInteger `json:"server_ctime"`
+		ServerMTime fileEntryInteger `json:"server_mtime"`
+		LocalCTime  fileEntryInteger `json:"local_ctime"`
+		LocalMTime  fileEntryInteger `json:"local_mtime"`
+		Category    fileEntryInteger `json:"category"`
+	}{
+		plain: plain(*f), FSID: fileEntryInteger(f.FSID), Size: fileEntryInteger(f.Size),
+		IsDir: fileEntryInteger(f.IsDir), Category: fileEntryInteger(f.Category),
+		ServerCTime: fileEntryInteger(f.ServerCTime), ServerMTime: fileEntryInteger(f.ServerMTime),
+		LocalCTime: fileEntryInteger(f.LocalCTime), LocalMTime: fileEntryInteger(f.LocalMTime),
+	}
+	if err := json.Unmarshal(b, &wire); err != nil {
+		return err
+	}
+	if int64(int(wire.IsDir)) != int64(wire.IsDir) {
+		return fmt.Errorf("file entry isdir overflows int")
+	}
+	if int64(int(wire.Category)) != int64(wire.Category) {
+		return fmt.Errorf("file entry category overflows int")
+	}
+	result := FileEntry(wire.plain)
+	result.FSID, result.Size = int64(wire.FSID), int64(wire.Size)
+	result.IsDir, result.Category = int(wire.IsDir), int(wire.Category)
+	result.ServerCTime, result.ServerMTime = int64(wire.ServerCTime), int64(wire.ServerMTime)
+	result.LocalCTime, result.LocalMTime = int64(wire.LocalCTime), int64(wire.LocalMTime)
+	*f = result
+	return nil
+}
+
 // ListResponse is the response of directory/search/category/recycle listings.
 type ListResponse struct {
 	errnoResp
