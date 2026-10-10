@@ -54,6 +54,11 @@ browser/challenge state across restarts. A successful `PassportLogin` or
 
 ## Registration from a webmaster shared link
 
+For an operational procedure that checks actual Webmaster acquisition credit,
+see the [Japanese registration and counting runbook](docs/WEBMASTER_REGISTRATION_RUNBOOK_JA.md).
+The official help describes app-based acquisition; Web API registration success
+alone does not establish reward eligibility.
+
 Prepare the shared-link context on a fresh, unauthenticated client **before**
 requesting an email code. Use the same client for all registration steps:
 
