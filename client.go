@@ -231,7 +231,13 @@ func (c *Client) doHTTP(req *http.Request, timeout time.Duration) (*http.Respons
 		}
 		var requestErr *url.Error
 		if errors.As(err, &requestErr) {
-			err = fmt.Errorf("Android app HTTP %s: %w", requestErr.Op, requestErr.Err)
+			op := requestErr.Op
+			// http.Client may wrap a transport's own url.Error. Strip every
+			// URL-bearing layer so the inner error cannot expose signed URLs.
+			for errors.As(err, &requestErr) {
+				err = requestErr.Err
+			}
+			err = fmt.Errorf("Android app HTTP %s: %w", op, err)
 		}
 		return nil, err
 	}
@@ -250,7 +256,12 @@ func apkRequestPath(path string) bool {
 	switch path {
 	case "/passport/getpubkey", "/passport/prelogin", "/passport/login",
 		"/passport/register_v4/sendcode", "/passport/register_v4/verify", "/passport/register_v4/finish",
-		"/api/shorturlinfo", "/share/list", "/share/transfer", "/api/report/user", "/api/account/uinfo":
+		"/api/shorturlinfo", "/share/list", "/share/transfer", "/api/report/user", "/api/account/uinfo",
+		"/rest/1.0/imact/miner/pull", "/rest/1.0/imact/miner/start", "/rest/1.0/imact/miner/getitem",
+		"/rest/1.0/imact/miner/finishgame", "/rest/1.0/inte/system/getrecord",
+		"/rest/1.0/imact/miner/queryvideo", "/rest/1.0/imact/puzzle/query",
+		"/rest/1.0/task/new/act/querybyname", "/rest/1.0/task/common/querystart",
+		"/rest/1.0/task/common/reportstart", "/rest/1.0/task/common/report", "/rest/1.0/task/common/receive":
 		return true
 	}
 	return false
