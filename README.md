@@ -3,7 +3,8 @@
 Go client for the HTTP protocols used by TeraBox Android APK 4.26.5. It implements
 the app's Hy email registration/login, Gold Miner WebView, and native account,
 sharing, taskcenter and post-login configuration requests. Construct every client from a captured
-`AndroidAppProfile`; the SDK does not generate a device identity.
+`AndroidAppProfile`. `NewAndroidGuestProfile` can explicitly generate an APK-format
+virtual installation from captured build constants; save it before first use.
 
 ```sh
 go get github.com/cfbeg/terabox-go@latest
@@ -44,6 +45,13 @@ cookie string with `WithCookies`; native UID is retained separately and is
 never inferred from the share owner's UK or an account-check UK.
 
 ## Registration from a shared link
+
+For accounts without device state, `NewAndroidGuestProfile(template)` generates
+a Cesium CUID, virtual model, app UA and matching native/Hy channels. It copies
+runtime maps and clears old account credentials, psign and inspection tokens.
+The factory is local and uses the verified APK CUID algorithm. Account UID/SK
+must still come from that account's authentication. Reuse saved identities on
+subsequent runs rather than calling the factory again.
 
 Create one guest app client per registration and keep that client throughout:
 
