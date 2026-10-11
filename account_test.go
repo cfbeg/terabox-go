@@ -2,120 +2,64 @@ package terabox
 
 import (
 	"context"
-	"errors"
-	"io"
+	"crypto/md5"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
 )
 
-type authTestTransport func(*http.Request) (*http.Response, error)
-
-func (f authTestTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	return f(req)
-}
-
-func authTestJSON(req *http.Request, body string) *http.Response {
-	return &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     make(http.Header),
-		Body:       io.NopCloser(strings.NewReader(body)),
-		Request:    req,
-	}
-}
-
-func TestCheckLoginRejectsInvalidRegionPrefix(t *testing.T) {
-	for _, prefix := range []string{
-		"example.invalid/", "example.invalid?", "jp.foo", "jp:443", "foo@bar",
-		" jp", "jp ", "-jp", "jp-", "_jp", "日本", strings.Repeat("a", 64),
-	} {
-		t.Run(prefix, func(t *testing.T) {
-			calls := 0
-			cli := NewClient("test-token", WithHTTPClient(&http.Client{Transport: authTestTransport(func(req *http.Request) (*http.Response, error) {
-				calls++
-				resp := authTestJSON(req, `{"errno":0,"uk":42}`)
-				resp.Header.Set("region-domain-prefix", prefix)
-				return resp, nil
-			})}))
-			before, _, _ := cli.snapshot()
-			resp, err := cli.CheckLogin(context.Background())
-			if err == nil || resp != nil {
-				t.Fatalf("got response %v, error %v; want rejected region", resp, err)
-			}
-			if calls != 1 {
-				t.Fatalf("made %d requests; want 1", calls)
-			}
-			after, _, _ := cli.snapshot()
-			if after != before || cli.Account().ID != 0 {
-				t.Fatalf("invalid region changed state: host=%q, account=%d", after, cli.Account().ID)
-			}
-		})
-	}
-}
-
-func TestCheckLoginFollowsValidRegion(t *testing.T) {
-	for _, prefix := range []string{"jp", "A", "region-1", strings.Repeat("a", 63)} {
-		t.Run(prefix, func(t *testing.T) {
-			calls := 0
-			cli := NewClient("test-token", WithHTTPClient(&http.Client{Transport: authTestTransport(func(req *http.Request) (*http.Response, error) {
-				calls++
-				if req.Header.Get("Cookie") != "lang=en; ndus=test-token" {
-					t.Fatalf("session cookie missing: %q", req.Header.Get("Cookie"))
-				}
-				resp := authTestJSON(req, `{"errno":0,"uk":42}`)
-				if calls == 1 {
-					resp.Header.Set("region-domain-prefix", prefix)
-				} else if req.URL.Host != prefix+"."+TeraBoxDomain {
-					t.Fatalf("regional host = %q", req.URL.Host)
-				}
-				return resp, nil
-			})}))
-			resp, err := cli.CheckLogin(context.Background())
-			if err != nil || resp == nil || resp.UK != 42 || calls != 2 || cli.Account().ID != 42 {
-				t.Fatalf("response=%v error=%v requests=%d account=%+v", resp, err, calls, cli.Account())
-			}
-		})
-	}
-}
-
-func TestGetCurrentUserInfoPreservesLoginFailure(t *testing.T) {
+func TestCheckLoginUsesAPKNativeAccountRequest(t *testing.T) {
 	calls := 0
-	cli := NewClient("", WithHTTPClient(&http.Client{Transport: authTestTransport(func(req *http.Request) (*http.Response, error) {
+	profile := androidFixtureProfile()
+	profile.LegacyNativeParams = map[string]string{"app_name": "dubox", "network_type": "wifi"}
+	client, err := NewAndroidAppClient(profile, WithCookies("ndus=fixture-session"), WithHTTPClient(&http.Client{Transport: shareRoundTripFunc(func(req *http.Request) (*http.Response, error) {
 		calls++
-		if req.URL.Path != "/api/check/login" {
-			t.Fatalf("unexpected request to %s", req.URL.Path)
+		if req.Method != http.MethodPost || req.URL.Path != "/api/account/uinfo" {
+			t.Error("APK account verification used a different path or verb")
 		}
-		return authTestJSON(req, `{"errno":-6,"show_msg":"login required"}`), nil
+		if err := req.ParseForm(); err != nil {
+			return nil, err
+		}
+		wantHash := fmt.Sprintf("%x", md5.Sum([]byte("fixture-session")))
+		if req.PostForm.Get("bdstoken") != wantHash || req.URL.Query().Has("bdstoken") || req.URL.Query().Has("rand") ||
+			req.URL.Query().Get("network_type") != "wifi" || req.URL.Query().Get("clienttype") != "1" {
+			t.Error("native account check lost the legacy query or native POST form")
+		}
+		if req.Header.Get("Cookie") != "ndus=fixture-session" || req.Header.Get("Referer") != "https://terabox.com/" || req.Header.Get("X-Requested-With") != "" {
+			t.Error("native account check lost the APK cookie/header contract")
+		}
+		return shareJSONResponse(req, `{"errno":0,"uk":"9007199254740993"}`), nil
 	})}))
-	resp, err := cli.GetCurrentUserInfo(context.Background())
-	var apiErr *APIError
-	if resp != nil || !errors.As(err, &apiErr) || apiErr.Code != -6 || apiErr.Message != "login required" {
-		t.Fatalf("response=%v error=%v; want original login failure", resp, err)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if calls != 1 {
-		t.Fatalf("made %d requests; want 1", calls)
+	response, err := client.CheckLogin(context.Background())
+	if err != nil || response.UK != 9007199254740993 || calls != 1 || client.Account().ID != response.UK {
+		t.Fatalf("account=%v error=%v calls=%d", response, err, calls)
 	}
-	// The single-endpoint method still returns the API result without a Go error.
-	login, err := cli.CheckLogin(context.Background())
-	if err != nil || login.Errno != -6 {
-		t.Fatalf("CheckLogin changed its API error contract: response=%v error=%v", login, err)
+	if client.AndroidAppProfile().UID != "" {
+		t.Fatal("account UK was inferred as NativeUID")
 	}
 }
 
-func TestGetCurrentUserInfoDoesNotCacheFailedRecords(t *testing.T) {
-	cli := NewClient("", WithHTTPClient(&http.Client{Transport: authTestTransport(func(req *http.Request) (*http.Response, error) {
-		return authTestJSON(req, `{"errno":-6,"records":[{"uk":42,"uname":"invalid","vip_type":2}]}`), nil
-	})}))
-	cli.updateParams(func(p *accountParams) {
-		p.accountID = 42
-		p.accountName = "original"
-	})
-	resp, err := cli.GetCurrentUserInfo(context.Background())
-	if err != nil || resp.Errno != -6 {
-		t.Fatalf("response=%v error=%v", resp, err)
+func TestAccountReplyRequiresExplicitStatusAndIdentity(t *testing.T) {
+	for _, body := range []string{`{}`, `{"errno":0}`, `{"errno":0,"uk":"broken"}`} {
+		var response CheckLoginResponse
+		if err := json.Unmarshal([]byte(body), &response); err == nil {
+			t.Errorf("invalid account body accepted: %s", body)
+		}
 	}
-	account := cli.Account()
-	if account.Name != "original" || account.IsVIP || account.VIPType != 0 {
-		t.Fatalf("failed response changed account: %+v", account)
+	var rejected CheckLoginResponse
+	if err := json.Unmarshal([]byte(`{"errno":-6,"errmsg":"login required"}`), &rejected); err != nil || rejected.Errno != -6 {
+		t.Fatalf("rejection lost: %v", err)
+	}
+	client, _ := NewAndroidAppClient(androidFixtureProfile(), WithHTTPClient(&http.Client{Transport: shareRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		t.Fatal("missing credentials must stop before network")
+		return nil, nil
+	})}))
+	if _, err := client.CheckLogin(context.Background()); err == nil || !strings.Contains(err.Error(), "ndus") {
+		t.Fatal("account verification did not require a session")
 	}
 }

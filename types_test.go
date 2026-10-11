@@ -103,12 +103,15 @@ func TestFileEntryRejectsNativeIntOverflow(t *testing.T) {
 }
 
 func TestGetShareListDecodesStringFileEntryFields(t *testing.T) {
-	c := NewClient("", WithHTTPClient(&http.Client{Transport: shareRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+	c, err := NewAndroidAppClient(androidFixtureProfile(), WithHTTPClient(&http.Client{Transport: shareRoundTripFunc(func(req *http.Request) (*http.Response, error) {
 		if req.Method != http.MethodGet || req.URL.Path != "/share/list" {
 			t.Fatalf("unexpected public-list request: %s %s", req.Method, req.URL.Path)
 		}
 		return shareJSONResponse(req, `{"errno":0,"share_id":"858486528090","uk_str":"9007199254740997","list":[`+stringFileEntryJSON+`]}`), nil
 	})}))
+	if err != nil {
+		t.Fatal(err)
+	}
 	response, err := c.GetShareList(context.Background(), "shared-key", 1)
 	if err != nil {
 		t.Fatal(err)

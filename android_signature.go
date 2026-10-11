@@ -3,12 +3,9 @@ package terabox
 import (
 	"errors"
 	"fmt"
-	"net/http"
 	"net/url"
 	"regexp"
-	"strconv"
 	"strings"
-	"time"
 	"unicode/utf8"
 )
 
@@ -26,16 +23,9 @@ type AndroidSigningConfig struct {
 	DeviceID  string
 	UID       string
 	EncodedSK string
-	// Version is used when the HTTP integration supplies a missing version
-	// parameter. Empty uses AndroidAPKVersion.
+	// Version records the inspected app version. Empty uses AndroidAPKVersion;
+	// SignURL uses the raw version query value supplied by the caller.
 	Version string
-	// Channel is the runtime app channel (android_<release>_<model>_bd-dubox_
-	// <build-channel>). Client integration requires it rather than inventing
-	// an Android device identity. SignURL itself does not use this field.
-	Channel string
-	// UserAgent optionally supplies the captured app UA for signed API calls.
-	// Passport and HTML session-refresh requests retain the client's UA.
-	UserAgent string
 }
 
 // AndroidSigner implements the URLHandler native path whose Java invocation
@@ -46,8 +36,6 @@ type AndroidSigner struct {
 	version          string
 	secret           []byte
 	encodedSKPresent bool
-	channel          string
-	userAgent        string
 }
 
 // NewAndroidSigner validates the app's runtime signing configuration and
@@ -70,12 +58,8 @@ func NewAndroidSigner(cfg AndroidSigningConfig) (*AndroidSigner, error) {
 			return nil, wrapErr(op, err)
 		}
 	}
-	if !utf8.ValidString(cfg.Channel) || strings.ContainsAny(cfg.Channel, "\r\n") ||
-		strings.ContainsAny(cfg.UserAgent, "\r\n") {
-		return nil, wrapErr(op, errors.New("channel and User-Agent must not contain line breaks; channel must be valid UTF-8"))
-	}
 	return &AndroidSigner{deviceID: cfg.DeviceID, uid: cfg.UID, version: cfg.Version,
-		secret: secret, encodedSKPresent: cfg.EncodedSK != "", channel: cfg.Channel, userAgent: cfg.UserAgent}, nil
+		secret: secret, encodedSKPresent: cfg.EncodedSK != ""}, nil
 }
 
 var (
@@ -89,7 +73,7 @@ var (
 // otherwise a 40-character rand is appended when nonempty time and version
 // parameters exist. The native regex uses raw URL values, without decoding or
 // sorting other parameters. This method does not inject a separate sign field.
-// HTTP integration supplies time in epoch milliseconds, not Unix seconds.
+// The app supplies time in epoch milliseconds, not Unix seconds.
 func (s *AndroidSigner) SignURL(rawURL, ndus string) (string, error) {
 	const op = "signAndroidURL"
 	if s == nil || s.uid == "" || s.deviceID == "" {
@@ -184,79 +168,4 @@ func ComputeAndroidSDKRand(input AndroidSDKRandInput) (string, error) {
 	data = append(data, androidJNIBytes(input.Version)...)
 	data = append(data, input.CertificateMD5...)
 	return androidSHA1(data), nil
-}
-
-// WithAndroidSigner enables the verified URLHandler signature for JSON API
-// calls and chunk uploads. It supplies the Android common query values and
-// reads the current NDUS cookie for each request. The default client remains
-// the Web/desktop client when no signer is supplied. Passport endpoints are
-// excluded, matching the APK interceptor; HTML token refresh is also kept on
-// its existing Web transport path.
-func WithAndroidSigner(s *AndroidSigner) Option {
-	return func(c *Client) { c.androidSigner = s }
-}
-
-// SetAndroidSigner replaces or disables signing after account/config changes.
-// Construct a new immutable signer when UID or net_param_sk changes. Nil
-// restores the existing Web/desktop request behavior.
-func (c *Client) SetAndroidSigner(s *AndroidSigner) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.androidSigner = s
-}
-
-func (c *Client) signAndroidRequest(req *http.Request) (*http.Request, error) {
-	for _, segment := range strings.Split(req.URL.Path, "/") {
-		if segment == "passport" {
-			return req, nil
-		}
-	}
-	c.mu.RLock()
-	signer := c.androidSigner
-	c.mu.RUnlock()
-	if signer == nil {
-		return req, nil
-	}
-	if signer.channel == "" {
-		return nil, errors.New("Android API signing requires the runtime app channel")
-	}
-	// Sign the session actually present in this request's cookie snapshot.
-	// A concurrent refresh may already have changed the client's cookie map.
-	ndus := ""
-	if cookie, err := req.Cookie("ndus"); err == nil {
-		ndus = cookie.Value
-	}
-	u := *req.URL
-	query, err := url.ParseQuery(u.RawQuery)
-	if err != nil {
-		return nil, err
-	}
-	// Preserve supplied time/version exactly. These are the actual URL values
-	// used by URLHandler, even if an endpoint supplies its own version.
-	if query.Get("time") == "" {
-		query.Set("time", strconv.FormatInt(time.Now().UnixMilli(), 10))
-	}
-	if query.Get("version") == "" {
-		query.Set("version", signer.version)
-	}
-	query.Set("devuid", signer.deviceID)
-	query.Set("cuid", signer.deviceID)
-	query.Set("clienttype", "1")
-	query.Set("channel", signer.channel)
-	query.Del("web")
-	u.RawQuery = query.Encode()
-	signedURL, err := signer.SignURL(u.String(), ndus)
-	if err != nil {
-		return nil, err
-	}
-	u2, err := url.Parse(signedURL)
-	if err != nil {
-		return nil, err
-	}
-	clone := req.Clone(req.Context())
-	clone.URL = u2
-	if signer.userAgent != "" {
-		clone.Header.Set("User-Agent", signer.userAgent)
-	}
-	return clone, nil
 }

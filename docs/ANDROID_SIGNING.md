@@ -111,47 +111,46 @@ lazy wrapper, but no active invocation was found in the inspected DEX files.
 Its positional argument labels mirror the equivalent legacy components;
 the HTTP client uses the Java-invoked URLHandler path.
 
-## Go integration
+## Go use
+
+`NewAndroidAppClient(profile)` uses the APK's native and bundled Hy flows.
+Its `AndroidAppProfile` carries the captured device identity, native/Hy
+parameters and account configuration. See [Android app protocol](ANDROID_APP.md)
+for that client and its bootstrap, persistence and configuration refresh.
+
+`AndroidSigner` exposes the local URLHandler kernel independently of HTTP:
 
 ```go
 signer, err := terabox.NewAndroidSigner(terabox.AndroidSigningConfig{
-	DeviceID: androidDeviceID,
-	UID: androidAccountUID,
-	EncodedSK: netParamSK,
-	Channel: androidChannel,
-	UserAgent: capturedAndroidUserAgent,
+    DeviceID: androidDeviceID,
+    UID: androidAccountUID,
+    EncodedSK: netParamSK,
+    Version: "4.26.5",
 })
 if err != nil {
-	return err
+    return err
 }
-client := terabox.NewClient(ndus, terabox.WithAndroidSigner(signer))
+signedURL, err := signer.SignURL(rawURLWithTimeAndVersion, ndus)
 ```
 
-These variables are runtime values from the relevant app/account configuration.
-An empty `EncodedSK` is accepted for an otherwise valid signer and makes
-`SignURL` preserve the URL. Device ID and UID remain required by this SDK
-constructor; the anonymous app H5 profile is a separate protocol surface.
-The channel is the app's `android_<release>_<model>_bd-dubox_<build-channel>`
-value. It is required for HTTP integration. A pure `SignURL` calculation does
-not require a channel. Version defaults to the inspected APK's `4.26.5`;
-the optional captured UA is used only on signed API calls.
+The signer does not construct endpoints, copy browser parameters, or override
+User-Agent/channel values. Those protocol fields belong to the captured app
+profile and the APK-specific client builders. Changing a UID or net_param_sk
+requires a newly constructed immutable signer.
 
-JSON API methods and chunk uploads supply `devuid`, `cuid`, `clienttype=1`,
-channel, version, and millisecond time before invoking `SignURL`; the Web `web`
-flag is removed. The digest uses NDUS from the request's actual Cookie header,
-so concurrent cookie refresh cannot make the digest disagree with that header.
-A request explicitly omitting cookies is signed with an empty NDUS.
+An empty `EncodedSK` makes `SignURL` preserve the supplied URL. A nonempty SK
+that decrypts to a leading NUL still passes the encoded-value guard and
+produces the native digest. Device ID and UID remain required by the signer
+constructor; the app client handles the guest's empty-SK protocol branch
+before constructing an account signer.
 
-The APK interceptor's proven exclusion is an exact `passport` path segment.
-Go also keeps HTML token-page refresh on its existing Web path as an
-interoperability choice, not an APK-discovered URL allowlist. Existing Web
-requests are unchanged unless a signer is enabled. This option adds the native
-signature component; it does not replace all Web endpoints with native Android
-endpoints or rewrite the existing Web passport registration protocol.
-
-`SetAndroidSigner(newSigner)` updates the profile when UID or `net_param_sk`
-changes. Passing nil disables it. Signers are immutable and safe to share.
-`SignURL` preserves existing `rand` values like the native implementation.
+The H5 passport builder's `rand=0`, the new native Retrofit builder's bare
+`rand`, and the old native guest GET builder's missing rand are distinct
+APK paths. `SignURL` supplies only the native kernel result. It does not apply
+the H5 fallback to unrelated native calls. The APK's general interceptor
+excludes an exact passport path segment, while bundled Hy requests obtain
+rand explicitly through a JavaScript bridge. The bundled Hy HTML and its
+`web=1` query fields remain part of the app's protocol.
 
 Go inputs must be valid UTF-8. JNI Modified UTF-8 handling reproduces NUL as
 `C0 80` and supplementary characters as separately encoded UTF-16 surrogates.
@@ -186,4 +185,5 @@ py -3 tools/verify_android_signature.py --apk path/to/TeraBox_Android_web_v4.26.
 The native library hash is pinned; unsupported libraries fail before emulation.
 The script does not install packages or contact the network. Ordinary Go tests
 use the checked-in vectors and require no APK, emulator, Python, or live account.
-Live server acceptance and device-attestation behavior have not been tested.
+The verification script does not contact the service or evaluate server-side
+device-attestation behavior.

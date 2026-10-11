@@ -6,7 +6,6 @@ import (
 	"crypto/md5"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/sha1"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
@@ -227,12 +226,4 @@ func EncryptRSA(message, publicKeyPEM string, mode int) (string, error) {
 		return "", fmt.Errorf("encryptRSA: %w", err)
 	}
 	return base64.StdEncoding.EncodeToString(encrypted), nil
-}
-
-// PRandGen generates the pseudo-random SHA-1 token from combined client
-// parameters used by the passport login flow.
-func PRandGen(client, seval, encpwd, email, browserid, random string) string {
-	combined := client + "-" + seval + "-" + encpwd + "-" + email + "-" + browserid + "-" + random
-	sum := sha1.Sum([]byte(combined))
-	return hex.EncodeToString(sum[:])
 }

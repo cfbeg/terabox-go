@@ -7,9 +7,8 @@ import (
 	"strings"
 )
 
-// Int64ish is an int64 that accepts either a JSON number or a JSON string
-// (the server is inconsistent: e.g. /api/download returns dlink[].fs_id
-// as a string while listings return numbers).
+// Int64ish accepts the JSON numbers and numeric strings returned by the APK's
+// account and public-share endpoints.
 type Int64ish int64
 
 // UnmarshalJSON accepts a JSON number or numeric string.
@@ -61,33 +60,7 @@ func wrapErr(op string, err error) error {
 	return &Error{Op: op, Err: err}
 }
 
-// errnoResp is embedded by response types that report a TeraBox `errno` code.
-type errnoResp struct {
-	Errno int `json:"errno"`
-}
-
-// requestIDs normalizes a response field that arrives either as a single
-// number or as an array of numbers.
-type requestIDs []int64
-
-func (r *requestIDs) UnmarshalJSON(data []byte) error {
-	s := strings.TrimSpace(string(data))
-	if s == "" || s == "null" {
-		return nil
-	}
-	if s[0] == '[' {
-		return json.Unmarshal(data, (*[]int64)(r))
-	}
-	var single int64
-	if err := json.Unmarshal(data, &single); err != nil {
-		return err
-	}
-	*r = requestIDs{single}
-	return nil
-}
-
-// FileEntry is a single file or directory in a remote listing
-// (api/list, api/search, api/categorylist, api/recycle/list).
+// FileEntry is a file or directory in the APK's public-share listing.
 type FileEntry struct {
 	FSID           int64  `json:"fs_id"`
 	Path           string `json:"path"`
@@ -152,14 +125,6 @@ func (f *FileEntry) UnmarshalJSON(b []byte) error {
 	result.LocalCTime, result.LocalMTime = int64(wire.LocalCTime), int64(wire.LocalMTime)
 	*f = result
 	return nil
-}
-
-// ListResponse is the response of directory/search/category/recycle listings.
-type ListResponse struct {
-	errnoResp
-	RequestID json.Number `json:"request_id,omitempty"`
-	GUID      int64       `json:"guid,omitempty"`
-	List      []FileEntry `json:"list"`
 }
 
 // httpStatusError is returned when the API answers with an unexpected status.

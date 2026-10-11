@@ -208,7 +208,10 @@ func TestAndroidAppSessionRestoreKeepsProtocolWithoutReferral(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := client.AndroidAppProfile()
-	fresh := NewClient("")
+	fresh, err := NewAndroidAppClient(androidFixtureProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := fresh.RestoreWebmasterRegistrationSession(&roundtrip); err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +226,7 @@ func TestAndroidAppSessionRestoreKeepsProtocolWithoutReferral(t *testing.T) {
 	}
 }
 
-func TestAndroidAppRejectsWebBootstrapAndFSEC(t *testing.T) {
+func TestAndroidAppRejectsMissingPCFAndFSEC(t *testing.T) {
 	for _, page := range []string{`<script>var templateData={"pcftoken":"fixture"};window.fsec={};</script>`, `<html>No PCF token</html>`} {
 		requests := 0
 		client, _ := NewAndroidAppClient(androidFixtureProfile(), WithHTTPClient(&http.Client{Transport: shareRoundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -233,12 +236,28 @@ func TestAndroidAppRejectsWebBootstrapAndFSEC(t *testing.T) {
 			}
 			return shareJSONResponse(req, page), nil
 		})}))
-		if _, err := client.UpdateAppData(context.Background(), ""); err == nil || requests != 0 {
-			t.Fatal("app client fetched the Web main page")
-		}
 		if _, err := client.RegisterSendCode(context.Background(), "fixture@example.invalid"); err == nil || requests != 1 {
 			t.Fatal("invalid/fsec bootstrap proceeded with plain email")
 		}
+	}
+}
+
+func TestAndroidAppRequiresProfileForRegistrationAndRestore(t *testing.T) {
+	zero := &Client{}
+	if _, err := zero.RegisterSendCode(context.Background(), "fixture@example.invalid"); err == nil {
+		t.Fatal("profile-free client entered registration")
+	}
+	if _, err := zero.PassportPreLogin(context.Background(), "fixture@example.invalid"); err == nil {
+		t.Fatal("profile-free client entered password login")
+	}
+	if _, err := zero.GetPublicKey(context.Background()); err == nil {
+		t.Fatal("profile-free client entered key bootstrap")
+	}
+	client, _ := NewAndroidAppClient(androidFixtureProfile())
+	saved := client.WebmasterRegistrationSession()
+	saved.AndroidApp = nil
+	if err := client.RestoreWebmasterRegistrationSession(saved); err == nil {
+		t.Fatal("snapshot without a captured app profile was restored")
 	}
 }
 

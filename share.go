@@ -91,90 +91,59 @@ type ShareTransferOptions struct {
 	OnDup string
 }
 
-func (c *Client) shareQuery() url.Values {
-	if c.isAndroidApp() {
-		// The native common-query builder is applied by androidAppAPIRequest.
-		return url.Values{}
-	}
-	query := c.appQuery()
-	data := c.dataSnapshot()
-	if data.jsToken != "" {
-		query.Set("jsToken", data.jsToken)
-	}
-	query.Set("dp-logid", data.logID)
-	return query
-}
-
 // GetShareInfo retrieves public share metadata. surl is an already normalized
 // key returned by ParseShareURL; the endpoint requires its extra leading 1.
 // Verification requirements are returned as a nonzero response Errno.
 func (c *Client) GetShareInfo(ctx context.Context, surl string) (*ShareInfoResponse, error) {
 	const op = "getShareInfo"
+	if err := c.requireAndroidApp(); err != nil {
+		return nil, wrapErr(op, err)
+	}
 	if err := validateShareKey(surl); err != nil {
 		return nil, wrapErr(op, err)
 	}
-	query := c.shareQuery()
+	query := url.Values{}
 	query.Set("shorturl", "1"+surl)
 	query.Set("root", "1")
-	if c.isAndroidApp() {
-		query.Set("type", "0")
-		query.Set("bot_uk", "")
-	} else {
-		query.Set("scene", "")
-	}
+	query.Set("type", "0")
+	query.Set("bot_uk", "")
 	return c.getShareMetadata(ctx, op, "/api/shorturlinfo", query, false)
 }
 
 // GetShareList retrieves one page of root files and the share's identifiers.
 // surl is already normalized; unlike shorturlinfo, share/list receives it
-// without an added 1. A nonpositive page uses page 1. The page size is 20000.
+// without an added 1. The public page argument is one-based, mapped to the
+// APK's zero-based root listing with 100 entries per page.
 func (c *Client) GetShareList(ctx context.Context, surl string, page int) (*ShareInfoResponse, error) {
 	const op = "getShareList"
+	if err := c.requireAndroidApp(); err != nil {
+		return nil, wrapErr(op, err)
+	}
 	if err := validateShareKey(surl); err != nil {
 		return nil, wrapErr(op, err)
 	}
 	if page <= 0 {
 		page = 1
 	}
-	query := c.shareQuery()
+	query := url.Values{}
 	query.Set("shorturl", surl)
 	query.Set("root", "1")
-	if c.isAndroidApp() {
-		// APK MultiShareListViewModel.y uses a zero-based root page with 100
-		// entries. Keep this public method's one-based page argument.
-		query.Set("page", strconv.Itoa(page-1))
-		query.Set("num", "100")
-		query.Set("dir", "")
-		query.Set("timestamp", strconv.FormatInt(c.androidAppTime()/1000, 10))
-		query.Set("bot_uk", "")
-	} else {
-		query.Set("page", strconv.Itoa(page))
-		query.Set("num", "20000")
-		query.Set("by", "name")
-		query.Set("order", "asc")
-	}
+	query.Set("page", strconv.Itoa(page-1))
+	query.Set("num", "100")
+	query.Set("dir", "")
+	query.Set("timestamp", strconv.FormatInt(c.androidAppTime()/1000, 10))
+	query.Set("bot_uk", "")
 	query.Set("scene", "")
 	return c.getShareMetadata(ctx, op, "/share/list", query, true)
 }
 
 func (c *Client) getShareMetadata(ctx context.Context, op, endpoint string, query url.Values, requireList bool) (*ShareInfoResponse, error) {
-	// Anonymous metadata requests with web=1 receive a verification response
-	// instead of the public share result. Authenticated reads retain the flag.
-	if ndus, _ := c.CookieValue("ndus"); ndus == "" {
-		query.Del("web")
-	}
 	var response ShareInfoResponse
 	var pendingCookies []*http.Cookie
-	headers := c.registrationHeaders()
-	if !c.isAndroidApp() {
-		headers["Accept"] = "application/json, text/plain, */*"
-		headers["X-Requested-With"] = "XMLHttpRequest"
-	}
 	err := c.doJSON(ctx, op, &requestOpts{
 		method:     http.MethodGet,
 		path:       endpoint,
 		query:      query,
-		headers:    headers,
 		onResponse: func(resp *http.Response) { pendingCookies = resp.Cookies() },
 	}, &response)
 	if err != nil {
@@ -194,10 +163,14 @@ func (c *Client) getShareMetadata(ctx context.Context, op, endpoint string, quer
 
 // TransferShare saves selected shared files to an absolute remote directory.
 // It sends shareid/from as query parameters and fsidlist/path as form fields,
-// matching the public web client. File IDs must belong to the given share.
+// matching APK IApi.d. async and ondup belong to the native form body.
+// File IDs must belong to the given share.
 // A successful asynchronous response does not mean the task has finished.
 func (c *Client) TransferShare(ctx context.Context, shareID, ownerUK int64, fsIDs []int64, dest string, opts *ShareTransferOptions) (*ShareTransferResponse, error) {
 	const op = "transferShare"
+	if err := c.requireAndroidApp(); err != nil {
+		return nil, wrapErr(op, err)
+	}
 	if shareID <= 0 || ownerUK <= 0 {
 		return nil, wrapErr(op, errors.New("positive share and owner IDs required"))
 	}
@@ -205,52 +178,28 @@ func (c *Client) TransferShare(ctx context.Context, shareID, ownerUK int64, fsID
 	if err != nil {
 		return nil, wrapErr(op, err)
 	}
-	android := c.isAndroidApp()
-	if !android {
-		if err := c.ensureJSToken(ctx); err != nil {
-			return nil, wrapErr(op, err)
-		}
-	}
-	query := c.shareQuery()
+	query := url.Values{}
 	query.Set("shareid", strconv.FormatInt(shareID, 10))
 	query.Set("from", strconv.FormatInt(ownerUK, 10))
-	if android {
-		query.Set("bot_uk", "")
-	} else {
-		query.Set("ondup", onDup)
-		query.Set("async", "1")
-		query.Set("bdstoken", c.dataSnapshot().bdsToken)
-	}
+	query.Set("bot_uk", "")
 	fileIDs, err := json.Marshal(fsIDs)
 	if err != nil {
 		return nil, wrapErr(op, err)
 	}
 	form := newForm()
-	if android {
-		// The APK caller serializes Java List<Long>.toString(), including the
-		// space between IDs. async/ondup are @Field values in native IApi.d.
-		form.Append("fsidlist", strings.ReplaceAll(string(fileIDs), ",", ", "))
-		form.Append("async", "1")
-		form.Append("ondup", onDup)
-		for key, value := range c.AndroidAppProfile().NativeCKData {
-			form.Append(key, value)
-		}
-	} else {
-		form.Append("fsidlist", string(fileIDs))
+	form.Append("fsidlist", strings.ReplaceAll(string(fileIDs), ",", ", "))
+	form.Append("async", "1")
+	form.Append("ondup", onDup)
+	for key, value := range c.AndroidAppProfile().NativeCKData {
+		form.Append(key, value)
 	}
 	form.Append("path", dest)
 	var response ShareTransferResponse
-	headers := c.registrationHeaders()
-	if !android {
-		headers["Accept"] = "application/json, text/plain, */*"
-		headers["X-Requested-With"] = "XMLHttpRequest"
-	}
 	err = c.doJSON(ctx, op, &requestOpts{
-		method:  http.MethodPost,
-		path:    "/share/transfer",
-		query:   query,
-		form:    form,
-		headers: headers,
+		method: http.MethodPost,
+		path:   "/share/transfer",
+		query:  query,
+		form:   form,
 	}, &response)
 	if err != nil {
 		return nil, err

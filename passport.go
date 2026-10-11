@@ -74,8 +74,8 @@ type PassportResponse struct {
 	Token       string `json:"token"`
 	RetryPeriod int    `json:"retry_period"`
 	CanSkipCode int    `json:"can_skip_code"`
-	// NDUS is extracted from the Set-Cookie header on successful
-	// PassportLogin / RegisterFinish calls.
+	// NDUS is the native data.ndus from successful app login/registration,
+	// checked against a Set-Cookie ndus when one is returned.
 	NDUS        string `json:"-"`
 	codePresent bool
 }
@@ -111,33 +111,6 @@ type PublicKeyResponse struct {
 	} `json:"data"`
 }
 
-// PassportInfoResponse is the /passport/get_info result.
-type PassportInfoResponse struct {
-	Errno int `json:"errno"`
-	Data  struct {
-		DisplayName string `json:"display_name"`
-	} `json:"data"`
-}
-
-// passportForm returns the common form fields for passport calls.
-func (c *Client) passportForm() *formValues {
-	if c.isAndroidApp() {
-		return c.androidH5Form()
-	}
-	data := c.dataSnapshot()
-	f := newForm()
-	f.Append("client", "web")
-	f.Append("pass_version", "2.8")
-	f.Append("clientfrom", "h5")
-	f.Append("pcftoken", data.pcfToken)
-	return f
-}
-
-func (c *Client) passportHeaders() map[string]string {
-	webHost, _, _ := c.snapshot()
-	return map[string]string{"Referer": webHost}
-}
-
 // extractNDUS pulls the ndus cookie out of a response's Set-Cookie headers.
 func extractNDUS(r *http.Response) string {
 	for _, ck := range r.Cookies() {
@@ -151,29 +124,21 @@ func extractNDUS(r *http.Response) string {
 // PassportPreLogin initiates the password login flow.
 func (c *Client) PassportPreLogin(ctx context.Context, email string) (*PreLoginResponse, error) {
 	const op = "passportPreLogin"
-	if c.isAndroidApp() {
-		if err := c.ensureAndroidApp(ctx); err != nil {
-			return nil, wrapErr(op, err)
-		}
-	} else if c.dataSnapshot().pcfToken == "" {
-		if _, err := c.UpdateAppData(ctx, "wap/outlogin/login"); err != nil {
-			return nil, wrapErr(op, err)
-		}
+	if err := c.ensureAndroidApp(ctx); err != nil {
+		return nil, wrapErr(op, err)
 	}
 
-	form := c.passportForm()
+	form := c.androidH5Form()
 	form.Append("email", email)
-	if profile := c.AndroidAppProfile(); profile != nil {
-		page, _ := url.Parse(profile.PageURL)
-		form.Append("pass_logid", page.Query().Get("logId"))
-	}
+	page, _ := url.Parse(c.AndroidAppProfile().PageURL)
+	form.Append("pass_logid", page.Query().Get("logId"))
 
 	var resp PreLoginResponse
 	err := c.doPassportJSON(ctx, op, &requestOpts{
 		method:  http.MethodPost,
 		path:    "/passport/prelogin",
 		form:    form,
-		headers: c.passportHeaders(),
+		headers: c.androidH5Headers(),
 	}, &resp)
 	if err != nil {
 		return nil, err
@@ -182,13 +147,16 @@ func (c *Client) PassportPreLogin(ctx context.Context, email string) (*PreLoginR
 }
 
 // PassportLogin completes the password login flow. On success resp.NDUS
-// contains the ndus token; create a new client with it.
+// contains the native ndus token, retained together with native UID on Client.
 //
 // When TeraBox risk control refuses the login (errno 460030 "dragdrop",
 // or a silent code=0 with null data), it returns a *LoginChallengeError;
 // its ChallengeURL can be shown to the user for manual captcha solving.
 func (c *Client) PassportLogin(ctx context.Context, pre *PreLoginResponse, email, password string) (*PassportResponse, error) {
 	const op = "passportLogin"
+	if err := c.requireAndroidApp(); err != nil {
+		return nil, wrapErr(op, err)
+	}
 	if pre == nil {
 		return nil, wrapErr(op, fmt.Errorf("prelogin response is nil"))
 	}
@@ -204,8 +172,6 @@ func (c *Client) PassportLogin(ctx context.Context, pre *PreLoginResponse, email
 			return nil, wrapErr(op, &APIError{Code: key.Code, Message: key.Msg})
 		}
 	}
-	browserid, _ := c.CookieValue("browserid")
-
 	encpwd, err := EncryptRSA(password, c.dataSnapshot().pubKey, RSAMD5Preprocess)
 	if err != nil {
 		return nil, wrapErr(op, err)
@@ -214,29 +180,25 @@ func (c *Client) PassportLogin(ctx context.Context, pre *PreLoginResponse, email
 
 	seval := pre.SevalVal()
 	random := pre.RandomVal()
-	prand := PRandGen("web", seval, encpwd, email, browserid, random)
-	if profile := c.AndroidAppProfile(); profile != nil {
-		prand = androidLoginPRand(pre, email, encpwd, profile.DeviceID)
-	}
+	profile := c.AndroidAppProfile()
+	prand := androidLoginPRand(pre, email, encpwd, profile.DeviceID)
 
-	form := c.passportForm()
+	form := c.androidH5Form()
 	form.Append("prand", prand)
 	form.Append("email", email)
 	form.Append("pwd", encpwd)
 	form.Append("seval", seval)
 	form.Append("random", random)
 	form.Append("timestamp", strconv.FormatInt(pre.TimestampVal(), 10))
-	if profile := c.AndroidAppProfile(); profile != nil {
-		page, _ := url.Parse(profile.PageURL)
-		form.Append("vcode", "")
-		form.Append("vcode_str", "")
-		form.Append("pass_logid", page.Query().Get("logId"))
-		form.Append("g_identity", "")
-		form.Append("identity", "")
-		form.Append("op_type", "2")
-		form.Append("membership_info", "1")
-		form.Append("choose_email", "0")
-	}
+	page, _ := url.Parse(profile.PageURL)
+	form.Append("vcode", "")
+	form.Append("vcode_str", "")
+	form.Append("pass_logid", page.Query().Get("logId"))
+	form.Append("g_identity", "")
+	form.Append("identity", "")
+	form.Append("op_type", "2")
+	form.Append("membership_info", "1")
+	form.Append("choose_email", "0")
 
 	var resp PassportResponse
 	var ndus string
@@ -245,7 +207,7 @@ func (c *Client) PassportLogin(ctx context.Context, pre *PreLoginResponse, email
 		method:  http.MethodPost,
 		path:    "/passport/login",
 		form:    form,
-		headers: c.passportHeaders(),
+		headers: c.androidH5Headers(),
 		onResponse: func(r *http.Response) {
 			ndus = extractNDUS(r)
 			pendingCookies = r.Cookies()
@@ -257,19 +219,17 @@ func (c *Client) PassportLogin(ctx context.Context, pre *PreLoginResponse, email
 	if chErr := c.maybeChallenge(&resp, true); chErr != nil {
 		return nil, chErr
 	}
-	if resp.Code == 0 {
-		if c.isAndroidApp() && resp.Errno == 0 {
-			var uid string
-			ndus, uid, err = androidFinishIdentity(&resp, ndus)
-			if err != nil {
-				return &resp, wrapErr(op, err)
-			}
-			c.mu.Lock()
-			mergeCookieValues(c.cookies, pendingCookies)
-			c.cookies["ndus"] = ndus
-			c.androidApp.profile.UID = uid
-			c.mu.Unlock()
+	if resp.Code == 0 && resp.Errno == 0 {
+		var uid string
+		ndus, uid, err = androidFinishIdentity(&resp, ndus)
+		if err != nil {
+			return &resp, wrapErr(op, err)
 		}
+		c.mu.Lock()
+		mergeCookieValues(c.cookies, pendingCookies)
+		c.cookies["ndus"] = ndus
+		c.androidApp.profile.UID = uid
+		c.mu.Unlock()
 		resp.NDUS = ndus
 	}
 	return &resp, nil
@@ -283,45 +243,35 @@ func (c *Client) PassportLogin(ctx context.Context, pre *PreLoginResponse, email
 // and retains server cookies for the remaining steps.
 func (c *Client) RegisterSendCode(ctx context.Context, email string) (*PassportResponse, error) {
 	const op = "regSendCode"
+	if err := c.requireAndroidApp(); err != nil {
+		return nil, wrapErr(op, err)
+	}
 	c.registrationMu.Lock()
 	defer c.registrationMu.Unlock()
 	c.mu.RLock()
-	completed := (c.referral != nil || c.androidApp != nil) && c.registrationFinished
+	completed := c.registrationFinished
 	c.mu.RUnlock()
 	if completed {
 		return nil, wrapErr(op, fmt.Errorf("registration already returned a session; retry only the referral transfer"))
 	}
-	if c.isAndroidApp() {
-		if err := c.ensureAndroidApp(ctx); err != nil {
-			return nil, wrapErr(op, err)
-		}
-	} else if c.dataSnapshot().pcfToken == "" {
-		page := "wap/outlogin/emailRegister"
-		if ref := c.WebmasterReferral(); ref != nil {
-			page += "?referrer=" + url.QueryEscape(ref.ShareURL)
-		}
-		if _, err := c.UpdateAppData(ctx, page); err != nil {
-			return nil, wrapErr(op, err)
-		}
+	if err := c.ensureAndroidApp(ctx); err != nil {
+		return nil, wrapErr(op, err)
 	}
 
-	form := c.passportForm()
+	form := c.androidH5Form()
 	form.Append("email", email)
-	if c.isAndroidApp() {
-		form.Append("op_type", "1")
-		form.Append("choose_email", "0")
-		form.Append("g_identity", "")
-	}
-	query := c.registrationSource(form, false)
+	form.Append("op_type", "1")
+	form.Append("choose_email", "0")
+	form.Append("g_identity", "")
+	c.registrationSource(form)
 
 	var resp PassportResponse
 	var pendingCookies []*http.Cookie
 	err := c.doPassportJSON(ctx, op, &requestOpts{
 		method:     http.MethodPost,
 		path:       "/passport/register_v4/sendcode",
-		query:      query,
 		form:       form,
-		headers:    c.registrationHeaders(),
+		headers:    c.androidH5Headers(),
 		onResponse: func(r *http.Response) { pendingCookies = r.Cookies() },
 	}, &resp)
 	if err != nil {
@@ -330,7 +280,7 @@ func (c *Client) RegisterSendCode(ctx context.Context, email string) (*PassportR
 	if chErr := c.maybeChallenge(&resp, false); chErr != nil {
 		return nil, chErr
 	}
-	if c.registrationSessionTracked() && resp.Code == 0 && resp.Errno == 0 {
+	if resp.Code == 0 && resp.Errno == 0 {
 		if !resp.codePresent {
 			return &resp, wrapErr(op, fmt.Errorf("registration response is missing code"))
 		}
@@ -355,14 +305,12 @@ func (c *Client) RegisterVerify(ctx context.Context, regToken, code string) (*Pa
 		return nil, wrapErr(op, err)
 	}
 
-	form := c.passportForm()
+	form := c.androidH5Form()
 	form.Append("token", regToken)
 	form.Append("code", code)
-	if c.isAndroidApp() {
-		form.Append("skip_code", "0")
-		form.Append("support_unify", "1")
-		form.Append("g_identity", "")
-	}
+	form.Append("skip_code", "0")
+	form.Append("support_unify", "1")
+	form.Append("g_identity", "")
 
 	var resp PassportResponse
 	var pendingCookies []*http.Cookie
@@ -370,7 +318,7 @@ func (c *Client) RegisterVerify(ctx context.Context, regToken, code string) (*Pa
 		method:     http.MethodPost,
 		path:       "/passport/register_v4/verify",
 		form:       form,
-		headers:    c.registrationHeaders(),
+		headers:    c.androidH5Headers(),
 		onResponse: func(r *http.Response) { pendingCookies = r.Cookies() },
 	}, &resp)
 	if err != nil {
@@ -379,7 +327,7 @@ func (c *Client) RegisterVerify(ctx context.Context, regToken, code string) (*Pa
 	if chErr := c.maybeChallenge(&resp, false); chErr != nil {
 		return nil, chErr
 	}
-	if c.registrationSessionTracked() && resp.Code == 0 && resp.Errno == 0 {
+	if resp.Code == 0 && resp.Errno == 0 {
 		if !resp.codePresent {
 			return &resp, wrapErr(op, fmt.Errorf("verification response is missing code"))
 		}
@@ -389,9 +337,8 @@ func (c *Client) RegisterVerify(ctx context.Context, regToken, code string) (*Pa
 }
 
 // RegisterFinish completes registration by setting the account password
-// (6-15 characters, at least one Latin letter). On success resp.NDUS
-// contains the ndus token; create a new client with it. For a prepared
-// WebmasterReferral the client also retains the authenticated session;
+// (8-20 characters, at least three character kinds). The Client retains
+// the native ndus and UID from the successful account response;
 // use RegisterFinishWithReferral to additionally submit a shared transfer.
 func (c *Client) RegisterFinish(ctx context.Context, regToken, password string) (*PassportResponse, error) {
 	const op = "regFinish"
@@ -400,19 +347,7 @@ func (c *Client) RegisterFinish(ctx context.Context, regToken, password string) 
 	if err := c.validateReferralRegistrationToken(regToken); err != nil {
 		return nil, wrapErr(op, err)
 	}
-	hasLetter := false
-	for i := 0; i < len(password); i++ {
-		ch := password[i]
-		if ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' {
-			hasLetter = true
-			break
-		}
-	}
-	validPassword := len(password) >= 6 && len(password) <= 15 && hasLetter
-	if c.isAndroidApp() {
-		validPassword = androidPasswordValid(password)
-	}
-	if !validPassword {
+	if !androidPasswordValid(password) {
 		return &PassportResponse{Code: -2, LogID: 0, Msg: "invalid password"}, nil
 	}
 
@@ -432,14 +367,11 @@ func (c *Client) RegisterFinish(ctx context.Context, regToken, password string) 
 	}
 	encpwd = ToURLSafeBase64(encpwd)
 
-	form := c.passportForm()
+	form := c.androidH5Form()
 	form.Append("token", regToken)
 	form.Append("pwd", encpwd)
-	if c.isAndroidApp() {
-		form.Append("g_identity", "")
-		form.Append("access_token", "")
-	}
-	query := c.registrationSource(form, true)
+	form.Append("g_identity", "")
+	form.Append("access_token", "")
 
 	var resp PassportResponse
 	var ndus string
@@ -447,17 +379,14 @@ func (c *Client) RegisterFinish(ctx context.Context, regToken, password string) 
 	if err := ctx.Err(); err != nil {
 		return nil, wrapErr(op, err)
 	}
-	if c.registrationSessionTracked() {
-		c.mu.Lock()
-		c.registrationFinished = true
-		c.mu.Unlock()
-	}
+	c.mu.Lock()
+	c.registrationFinished = true
+	c.mu.Unlock()
 	err = c.doPassportJSON(ctx, op, &requestOpts{
 		method:  http.MethodPost,
 		path:    "/passport/register_v4/finish",
-		query:   query,
 		form:    form,
-		headers: c.registrationHeaders(),
+		headers: c.androidH5Headers(),
 		onResponse: func(r *http.Response) {
 			ndus = extractNDUS(r)
 			pendingCookies = r.Cookies()
@@ -467,7 +396,7 @@ func (c *Client) RegisterFinish(ctx context.Context, regToken, password string) 
 		// A returned session cookie can outlive a malformed response. Preserve
 		// it for account-status checks instead of silently repeating account
 		// creation. The response code is explicitly unknown in this case.
-		if c.registrationSessionTracked() && ndus != "" {
+		if ndus != "" {
 			c.commitReferralRegistration(pendingCookies, ndus, false)
 			return &PassportResponse{Code: -1, Msg: "registration outcome unknown", NDUS: ndus}, err
 		}
@@ -477,7 +406,7 @@ func (c *Client) RegisterFinish(ctx context.Context, regToken, password string) 
 		c.resetReferralFinishAttempt()
 		return nil, chErr
 	}
-	if c.registrationSessionTracked() && !resp.codePresent && resp.Errno == 0 {
+	if !resp.codePresent && resp.Errno == 0 {
 		if ndus != "" {
 			c.commitReferralRegistration(pendingCookies, ndus, false)
 		}
@@ -487,50 +416,39 @@ func (c *Client) RegisterFinish(ctx context.Context, regToken, password string) 
 	if resp.Code != 0 || resp.Errno != 0 {
 		c.resetReferralFinishAttempt()
 	}
-	if resp.Code == 0 {
-		if c.isAndroidApp() && resp.Errno == 0 {
-			nativeNDUS, uid, identityErr := androidFinishIdentity(&resp, ndus)
-			if identityErr != nil {
-				if ndus != "" {
-					c.commitReferralRegistration(pendingCookies, ndus, false)
-				}
-				resp.NDUS = ndus
-				return &resp, wrapErr(op, identityErr)
+	if resp.Code == 0 && resp.Errno == 0 {
+		nativeNDUS, uid, identityErr := androidFinishIdentity(&resp, ndus)
+		if identityErr != nil {
+			if ndus != "" {
+				c.commitReferralRegistration(pendingCookies, ndus, false)
 			}
-			ndus = nativeNDUS
-			pendingCookies = append(pendingCookies, &http.Cookie{Name: "ndus", Value: ndus})
-			c.mu.Lock()
-			c.androidApp.profile.UID = uid
-			c.mu.Unlock()
+			resp.NDUS = ndus
+			return &resp, wrapErr(op, identityErr)
 		}
+		ndus = nativeNDUS
+		pendingCookies = append(pendingCookies, &http.Cookie{Name: "ndus", Value: ndus})
+		c.mu.Lock()
+		c.androidApp.profile.UID = uid
+		c.mu.Unlock()
 		resp.NDUS = ndus
-		if resp.Errno == 0 && ndus != "" && c.registrationSessionTracked() {
-			c.commitReferralRegistration(pendingCookies, ndus, true)
-		}
+		c.commitReferralRegistration(pendingCookies, ndus, true)
 	}
 	return &resp, nil
 }
 
 // GetPublicKey fetches the server RSA public key used to encrypt passwords
-// and stores it in the client state. The JS client sends no Cookie header
-// on this call.
+// and stores it in the app client state using the Hy POST request profile.
 func (c *Client) GetPublicKey(ctx context.Context) (*PublicKeyResponse, error) {
 	const op = "getPublicKey"
-	method, noCookie := http.MethodGet, true
-	var form *formValues
-	if c.isAndroidApp() {
-		if err := c.ensureAndroidApp(ctx); err != nil {
-			return nil, wrapErr(op, err)
-		}
-		method, noCookie, form = http.MethodPost, false, c.androidH5Form()
+	if err := c.ensureAndroidApp(ctx); err != nil {
+		return nil, wrapErr(op, err)
 	}
 
 	var resp PublicKeyResponse
 	err := c.doPassportJSON(ctx, op, &requestOpts{
-		method:   method,
-		path:     "/passport/getpubkey",
-		noCookie: noCookie,
-		form:     form,
+		method: http.MethodPost,
+		path:   "/passport/getpubkey",
+		form:   c.androidH5Form(),
 	}, &resp)
 	if err != nil {
 		return nil, err
@@ -545,44 +463,16 @@ func (c *Client) GetPublicKey(ctx context.Context) (*PublicKeyResponse, error) {
 	return &resp, nil
 }
 
-// PassportGetInfo retrieves passport user information for the current
-// session and stores the account display name.
-func (c *Client) PassportGetInfo(ctx context.Context) (*PassportInfoResponse, error) {
-	const op = "passportGetInfo"
-
-	var resp PassportInfoResponse
-	err := c.doJSON(ctx, op, &requestOpts{
-		method: http.MethodGet,
-		path:   "/passport/get_info",
-	}, &resp)
-	if err != nil {
-		return nil, err
-	}
-	if resp.Errno == 0 {
-		name := resp.Data.DisplayName
-		c.updateParams(func(p *accountParams) { p.accountName = name })
-	}
-	return &resp, nil
-}
-
-// LoginChallengeError is returned when TeraBox risk control refuses a
-// passport call: either explicitly (errno 460030, errmsg "dragdrop") or
-// silently (login answered code=0 with null data). ChallengeURL is the
-// captcha page a human opens in a browser on the same network: with a
-// request id it is the anticapt page tied to the refused request,
-// otherwise the loginprotect fallback page.
-//
-// Challenges are per-request: every refusal issues a fresh RequestID
-// (browser-verifying one request does not clear later ones), so always
-// use the newest ChallengeURL, solve it, then retry the login.
-// Live-verified: solving the returned anticapt URL in a browser unblocks
-// the very next PassportLogin from the same network.
+// LoginChallengeError preserves the APK Hy flow's per-request verification
+// response. ChallengeURL is the captured Hy page containing the app challenge
+// UI; RequestID identifies the refused request. Keep the same app session when
+// completing verification rather than starting a fresh registration.
 type LoginChallengeError struct {
 	Errno        int    // server errno (460030 when explicit)
 	Code         int    // server code field
 	ErrMsg       string // server errmsg/msg
 	RequestID    string // request id identifying the challenge, if any
-	ChallengeURL string // captcha page for manual solving
+	ChallengeURL string // captured Hy page; app handles the supplied RequestID
 }
 
 func (e *LoginChallengeError) Error() string {
@@ -595,21 +485,11 @@ func isNullJSON(d json.RawMessage) bool {
 	return s == "" || s == "null"
 }
 
-// challengeURL builds the captcha page URL for manual solving. With a
-// request id it is the anticapt page tied to the refused request
-// (observed browser flow: anticapt → /captcha/getslide →
-// /captcha/checkslide); otherwise it falls back to loginprotect.
-func (c *Client) challengeURL(resp *PassportResponse) string {
-	webHost, _, _ := c.snapshot()
-	id := resp.RequestIDString
-	if id == "" && resp.RequestID != "" {
-		id = resp.RequestID.String()
+func (c *Client) challengeURL() string {
+	if profile := c.AndroidAppProfile(); profile != nil {
+		return profile.PageURL
 	}
-	if id != "" {
-		return webHost + "/anticapt?type=dragdrop&requestId=" + id +
-			"&lang=" + c.lang + "&platform=web"
-	}
-	return webHost + "/wap/outlogin/loginprotect"
+	return ""
 }
 
 // maybeChallenge converts a passport risk-control response into a
@@ -639,6 +519,6 @@ func (c *Client) maybeChallenge(resp *PassportResponse, nullDataMeansChallenge b
 		Code:         resp.Code,
 		ErrMsg:       msg,
 		RequestID:    id,
-		ChallengeURL: c.challengeURL(resp),
+		ChallengeURL: c.challengeURL(),
 	}
 }

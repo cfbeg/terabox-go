@@ -112,7 +112,7 @@ func validateAndroidAppProfile(profile AndroidAppProfile) (AndroidAppProfile, er
 	}
 	if profile.EncodedSK != "" {
 		if _, err := NewAndroidSigner(AndroidSigningConfig{DeviceID: profile.DeviceID, UID: profile.UID,
-			EncodedSK: profile.EncodedSK, Version: profile.Version, Channel: profile.NativeChannel}); err != nil {
+			EncodedSK: profile.EncodedSK, Version: profile.Version}); err != nil {
 			return profile, err
 		}
 	}
@@ -147,7 +147,7 @@ func validateAndroidAppProfile(profile AndroidAppProfile) (AndroidAppProfile, er
 
 // NewAndroidAppClient creates the APK's native/Hy protocol client without
 // network activity. It requires a captured profile and does not invent a device
-// identity. The existing NewClient and WithAndroidSigner retain their behavior.
+// identity. All HTTP request paths use the app's captured protocol families.
 func NewAndroidAppClient(profile AndroidAppProfile, opts ...Option) (*Client, error) {
 	profile, err := validateAndroidAppProfile(profile)
 	if err != nil {
@@ -156,9 +156,9 @@ func NewAndroidAppClient(profile AndroidAppProfile, opts ...Option) (*Client, er
 	page, _ := url.Parse(profile.PageURL)
 	initial := []Option{
 		func(c *Client) { c.cookies = make(map[string]string) },
-		WithWebHost(urlOrigin(page)), WithUserAgent(profile.UserAgent),
+		WithAPIHost(urlOrigin(page)),
 	}
-	c := NewClient("", append(initial, opts...)...)
+	c := newClient(append(initial, opts...)...)
 	c.userAgent, c.lang = profile.UserAgent, profile.Language
 	c.androidApp = &androidAppState{profile: profile, now: time.Now}
 	return c, nil
@@ -176,12 +176,6 @@ func (c *Client) AndroidAppProfile() *AndroidAppProfile {
 	return &profile
 }
 
-func (c *Client) isAndroidApp() bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.androidApp != nil
-}
-
 func (c *Client) androidAppTime() int64 {
 	c.mu.RLock()
 	now := c.androidApp.now
@@ -191,7 +185,7 @@ func (c *Client) androidAppTime() int64 {
 
 func (c *Client) androidAppSigner(profile AndroidAppProfile) (*AndroidSigner, error) {
 	return NewAndroidSigner(AndroidSigningConfig{DeviceID: profile.DeviceID, UID: profile.UID,
-		EncodedSK: profile.EncodedSK, Version: profile.Version, Channel: profile.NativeChannel})
+		EncodedSK: profile.EncodedSK, Version: profile.Version})
 }
 
 func (c *Client) androidH5Rand(profile AndroidAppProfile, timestamp int64) (string, error) {
@@ -260,7 +254,10 @@ func (c *Client) androidH5Headers() map[string]string {
 // bare rand; the explicit H5 rand=0 fallback belongs only to the Hy builder.
 func (c *Client) androidAppAPIRequest(req *http.Request) (*http.Request, error) {
 	profile := c.AndroidAppProfile()
-	if profile == nil || strings.Contains(req.URL.Path, "/passport/") {
+	if profile == nil {
+		return nil, errors.New("Android app profile is required for API requests")
+	}
+	if strings.Contains(req.URL.Path, "/passport/") {
 		return req, nil
 	}
 	clone := req.Clone(req.Context())
@@ -269,7 +266,7 @@ func (c *Client) androidAppAPIRequest(req *http.Request) (*http.Request, error) 
 	query.Del("jsToken")
 	query.Del("bdstoken")
 	query.Del("rand")
-	legacy := clone.URL.Path == "/api/shorturlinfo" || clone.URL.Path == "/api/report/user"
+	legacy := clone.URL.Path == "/api/shorturlinfo" || clone.URL.Path == "/api/report/user" || clone.URL.Path == "/api/account/uinfo"
 	params := profile.NativeParams
 	if legacy {
 		params = profile.LegacyNativeParams
@@ -281,7 +278,7 @@ func (c *Client) androidAppAPIRequest(req *http.Request) (*http.Request, error) 
 		query.Set(key, value)
 	}
 	query.Del("rand")
-	if legacy {
+	if legacy && clone.URL.Path != "/api/account/uinfo" {
 		if cookie, err := clone.Cookie("ndus"); err == nil && cookie.Value != "" {
 			query.Set("bdstoken", fmt.Sprintf("%x", md5.Sum([]byte(cookie.Value))))
 		}
@@ -349,6 +346,9 @@ func (c *Client) ensureAndroidApp(ctx context.Context) error {
 	c.mu.RLock()
 	state := c.androidApp
 	c.mu.RUnlock()
+	if state == nil {
+		return errors.New("Android app profile is required for Hy bootstrap")
+	}
 	state.bootMu.Lock()
 	defer state.bootMu.Unlock()
 	c.mu.RLock()
@@ -458,7 +458,7 @@ func androidPageObjects(page string) []string {
 func (c *Client) loadAndroidHyPage(ctx context.Context) error {
 	profile := c.AndroidAppProfile()
 	target, _ := url.Parse(profile.PageURL)
-	_, _, cookies := c.snapshot()
+	_, cookies := c.snapshot()
 	var pending []*http.Cookie
 	for hops := 0; ; hops++ {
 		if target.Path != "/wap/hylogin" && !strings.HasPrefix(target.Path, "/wap/hylogin/") {
@@ -539,19 +539,7 @@ func (c *Client) loadAndroidHyPage(ctx context.Context) error {
 	}
 }
 
-func (c *Client) androidH5JSON(ctx context.Context, op, path string, form *formValues, out any, onResponse func(*http.Response)) error {
-	query, err := c.androidH5Query()
-	if err != nil {
-		return wrapErr(op, err)
-	}
-	return c.doJSON(ctx, op, &requestOpts{method: http.MethodPost, path: path,
-		query: query, form: form, headers: c.androidH5Headers(), onResponse: onResponse}, out)
-}
-
 func (c *Client) doPassportJSON(ctx context.Context, op string, options *requestOpts, out any) error {
-	if !c.isAndroidApp() {
-		return c.doJSON(ctx, op, options, out)
-	}
 	if err := c.ensureAndroidApp(ctx); err != nil {
 		return wrapErr(op, err)
 	}
@@ -561,16 +549,17 @@ func (c *Client) doPassportJSON(ctx context.Context, op string, options *request
 	}
 	copy := *options
 	copy.query, copy.headers, copy.noCookie = query, c.androidH5Headers(), false
+	if options.form != nil {
+		copy.form = &formValues{keys: append([]string(nil), options.form.keys...), values: append([]string(nil), options.form.values...)}
+		common := c.androidH5Form()
+		for i, key := range common.keys {
+			copy.form.Set(key, common.values[i])
+		}
+	}
 	if copy.method == http.MethodGet {
 		copy.query.Set("psign", c.AndroidAppProfile().PSign)
 	}
 	return c.doJSON(ctx, op, &copy, out)
-}
-
-func (c *Client) registrationSessionTracked() bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.referral != nil || c.androidApp != nil
 }
 
 func androidPasswordValid(password string) bool {

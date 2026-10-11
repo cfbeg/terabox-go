@@ -5,13 +5,12 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
-	"strconv"
 )
 
 // WebmasterReferral records the shared link used to enter registration.
 // ShareFromSURL and WebmasterUK are local attribution metadata, not invented
-// passport form fields or cookies. The wire flow uses the web client's
-// reg_source, first_referer, Referer, and actual server-issued cookies.
+// passport form fields or cookies. The APK Hy flow sends reg_source=share
+// during SendCode and retains its captured app profile and server cookies.
 type WebmasterReferral struct {
 	ShareURL      string      `json:"share_url"`
 	ShareFromSURL string      `json:"share_from_surl"`
@@ -21,16 +20,14 @@ type WebmasterReferral struct {
 	Source        string      `json:"source,omitempty"`
 }
 
-// WebmasterReferralOptions selects one of the shared-page sources observed in
-// the current Web dialog. Empty Source uses "share". "web_share" enables the
-// dialog's koltype=1 sendcode path; "web_share_videoplay" is also supported.
+// WebmasterReferralOptions selects the APK's shared-page source "share".
 type WebmasterReferralOptions struct {
 	Source string
 }
 
 func validateReferralSource(source string) error {
-	if source != "" && source != "share" && source != "web_share" && source != "web_share_videoplay" {
-		return errors.New("registration source must be share, web_share, or web_share_videoplay")
+	if source != "" && source != "share" {
+		return errors.New("registration source must be the APK's share source")
 	}
 	return nil
 }
@@ -59,18 +56,18 @@ func (c *Client) PrepareWebmasterReferral(ctx context.Context, shareURL string) 
 }
 
 // PrepareWebmasterReferralWithOptions prepares the same shared-link flow with
-// an explicitly selected Web dialog source.
+// the APK's share source.
 func (c *Client) PrepareWebmasterReferralWithOptions(ctx context.Context, shareURL string, opts *WebmasterReferralOptions) (*WebmasterReferral, error) {
 	const op = "prepareWebmasterReferral"
+	if err := c.requireAndroidApp(); err != nil {
+		return nil, wrapErr(op, err)
+	}
 	source := "share"
 	if opts != nil && opts.Source != "" {
 		source = opts.Source
 	}
 	if err := validateReferralSource(source); err != nil {
 		return nil, wrapErr(op, err)
-	}
-	if c.isAndroidApp() && source != "share" {
-		return nil, wrapErr(op, errors.New("Android app referrals use the APK's share source"))
 	}
 	surl, err := ParseShareURL(shareURL)
 	if err != nil {
@@ -130,13 +127,13 @@ type WebmasterRegistrationSession struct {
 	AndroidApp            *AndroidAppProfile `json:"android_app,omitempty"`
 }
 
-// WebmasterRegistrationSession returns a serializable snapshot, or nil when
-// no referral was prepared. Restore it on a fresh client with
+// WebmasterRegistrationSession returns a serializable app snapshot, including
+// registrations without a referral. Restore it on a fresh app client with
 // RestoreWebmasterRegistrationSession before continuing the registration.
 func (c *Client) WebmasterRegistrationSession() *WebmasterRegistrationSession {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if c.referral == nil && c.androidApp == nil {
+	if c.androidApp == nil {
 		return nil
 	}
 	result := &WebmasterRegistrationSession{
@@ -148,22 +145,23 @@ func (c *Client) WebmasterRegistrationSession() *WebmasterRegistrationSession {
 	if c.referral != nil {
 		result.Referral = *cloneWebmasterReferral(c.referral)
 	}
-	if c.androidApp != nil {
-		profile := copyAndroidAppProfile(c.androidApp.profile)
-		result.AndroidApp = &profile
-	}
+	profile := copyAndroidAppProfile(c.androidApp.profile)
+	result.AndroidApp = &profile
 	return result
 }
 
 // RestoreWebmasterRegistrationSession restores a saved referral flow on a fresh
 // unauthenticated client. WebHost must be a trusted endpoint; custom origins
-// must first be configured explicitly with WithWebHost.
+// must first be configured explicitly with WithAPIHost.
 func (c *Client) RestoreWebmasterRegistrationSession(saved *WebmasterRegistrationSession) error {
 	const op = "restoreWebmasterRegistrationSession"
-	if saved == nil {
-		return wrapErr(op, errors.New("registration session required"))
+	if saved == nil || saved.AndroidApp == nil {
+		return wrapErr(op, errors.New("registration session with a captured Android profile is required"))
 	}
-	if saved.Referral.ShareURL != "" || saved.AndroidApp == nil {
+	if err := c.requireAndroidApp(); err != nil {
+		return wrapErr(op, err)
+	}
+	if saved.Referral.ShareURL != "" {
 		surl, err := ParseShareURL(saved.Referral.ShareURL)
 		if err != nil {
 			return wrapErr(op, err)
@@ -173,9 +171,6 @@ func (c *Client) RestoreWebmasterRegistrationSession(saved *WebmasterRegistratio
 		}
 		if err := validateReferralSource(saved.Referral.Source); err != nil {
 			return wrapErr(op, err)
-		}
-		if saved.AndroidApp != nil && saved.Referral.Source != "" && saved.Referral.Source != "share" {
-			return wrapErr(op, errors.New("saved Android referral has a Web-only source"))
 		}
 	}
 	host, err := url.Parse(saved.WebHost)
@@ -190,23 +185,15 @@ func (c *Client) RestoreWebmasterRegistrationSession(saved *WebmasterRegistratio
 	}
 	// Reuse the established CookieString format without adding local metadata
 	// to the Cookie header. The incoming client remains untouched on failure.
-	var restored *Client
-	if saved.AndroidApp != nil {
-		restored, err = NewAndroidAppClient(*saved.AndroidApp, WithCookies(saved.Cookies))
-		if err != nil {
-			return wrapErr(op, err)
-		}
-		if saved.RegistrationConfirmed && saved.AndroidApp.UID == "" {
-			return wrapErr(op, errors.New("confirmed Android registration is missing its native UID"))
-		}
-		if saved.RegistrationToken != "" && saved.PCFToken == "" {
-			return wrapErr(op, errors.New("saved Android registration is missing its Hy pcftoken"))
-		}
-	} else {
-		if c.isAndroidApp() {
-			return wrapErr(op, errors.New("cannot restore a Web session onto an Android app client"))
-		}
-		restored = NewClient("", WithCookies(saved.Cookies))
+	restored, err := NewAndroidAppClient(*saved.AndroidApp, WithCookies(saved.Cookies))
+	if err != nil {
+		return wrapErr(op, err)
+	}
+	if saved.RegistrationConfirmed && saved.AndroidApp.UID == "" {
+		return wrapErr(op, errors.New("confirmed Android registration is missing its native UID"))
+	}
+	if saved.RegistrationToken != "" && saved.PCFToken == "" {
+		return wrapErr(op, errors.New("saved Android registration is missing its Hy pcftoken"))
 	}
 	if restored.cookies["ndus"] != saved.NDUS {
 		return wrapErr(op, errors.New("saved registration token does not match its session cookie"))
@@ -221,8 +208,12 @@ func (c *Client) RestoreWebmasterRegistrationSession(saved *WebmasterRegistratio
 	if c.cookies["ndus"] != "" || c.referral != nil || c.registrationToken != "" || c.registrationNDUS != "" {
 		return wrapErr(op, errors.New("restore requires a fresh unauthenticated client"))
 	}
-	if c.androidApp != nil && (c.androidApp.ready || saved.AndroidApp == nil ||
-		c.androidApp.profile.DeviceID != saved.AndroidApp.DeviceID || c.androidApp.profile.Version != saved.AndroidApp.Version) {
+	if c.androidApp.ready || c.androidApp.profile.DeviceID != saved.AndroidApp.DeviceID ||
+		c.androidApp.profile.Version != saved.AndroidApp.Version ||
+		c.androidApp.profile.UserAgent != restored.androidApp.profile.UserAgent ||
+		c.androidApp.profile.NativeChannel != restored.androidApp.profile.NativeChannel ||
+		c.androidApp.profile.ClientType != restored.androidApp.profile.ClientType ||
+		c.androidApp.profile.Language != restored.androidApp.profile.Language {
 		return wrapErr(op, errors.New("restore requires a fresh client with the same Android identity"))
 	}
 	c.cookies = restored.cookies
@@ -234,69 +225,28 @@ func (c *Client) RestoreWebmasterRegistrationSession(saved *WebmasterRegistratio
 	c.registrationNDUS = saved.NDUS
 	c.registrationConfirmed = saved.RegistrationConfirmed
 	c.registrationFinished = saved.FinishAttempted || saved.NDUS != ""
-	c.data = appData{logID: "0", pcfToken: saved.PCFToken}
-	c.params = accountParams{cursor: "null", spaceTotal: 1 << 30, spaceAvailable: 1 << 30}
-	if restored.androidApp != nil {
-		c.androidApp = restored.androidApp
-		c.androidApp.ready = saved.PCFToken != "" && c.androidApp.profile.PSign != ""
-		c.userAgent, c.lang = c.androidApp.profile.UserAgent, c.androidApp.profile.Language
-	}
+	c.data = appData{pcfToken: saved.PCFToken}
+	c.params = accountParams{}
+	c.androidApp = restored.androidApp
+	c.androidApp.ready = saved.PCFToken != "" && c.androidApp.profile.PSign != ""
+	c.userAgent, c.lang = c.androidApp.profile.UserAgent, c.androidApp.profile.Language
 	return nil
 }
 
-func (c *Client) registrationHeaders() map[string]string {
-	if c.isAndroidApp() {
-		return c.androidH5Headers()
-	}
-	headers := c.passportHeaders()
-	if ref := c.WebmasterReferral(); ref != nil {
-		headers["Referer"] = ref.ShareURL
-	}
-	return headers
-}
-
-// registrationSource follows the shared-page dialog's default source. Verify
-// does not carry these fields in the current web client.
-func (c *Client) registrationSource(form *formValues, finishing bool) url.Values {
+// registrationSource follows the APK Hy screen's SendCode source field.
+func (c *Client) registrationSource(form *formValues) {
 	ref := c.WebmasterReferral()
-	if c.isAndroidApp() {
-		if !finishing && ref != nil {
-			form.Append("reg_source", "share")
-		}
-		return nil
+	if ref != nil {
+		form.Append("reg_source", "share")
 	}
-	if ref == nil {
-		return nil
-	}
-	u, _ := url.Parse(ref.ShareURL) // validated when the context was prepared
-	source := ref.Source
-	if source == "" {
-		source = "share"
-	}
-	query := url.Values{}
-	if !finishing {
-		koltype := 0
-		if source == "web_share" {
-			koltype = 1
-		}
-		if source == "web_share" || source == "web_share_videoplay" {
-			source = "share"
-		}
-		form.Append("koltype", strconv.Itoa(koltype))
-		query.Set("koltype", strconv.Itoa(koltype))
-	}
-	form.Append("reg_source", source)
-	form.Append("first_referer", u.Hostname())
-	query.Set("reg_source", source)
-	return query
 }
 
 func (c *Client) validateReferralRegistrationToken(token string) error {
+	if err := c.requireAndroidApp(); err != nil {
+		return err
+	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if c.referral == nil && c.androidApp == nil {
-		return nil
-	}
 	if c.registrationFinished {
 		return errors.New("registration finish was already attempted; check account state and retry only the referral transfer")
 	}
@@ -313,19 +263,15 @@ func (c *Client) commitReferralRegistration(cookies []*http.Cookie, ndus string,
 	c.registrationNDUS = ndus
 	c.registrationConfirmed = confirmed
 	c.registrationFinished = true
-	// Anonymous web tokens must not be reused for an authenticated transfer.
+	// The Hy page's anonymous JavaScript token is not native transfer state.
 	c.data.jsToken = ""
-	c.data.bdsToken = ""
-	c.data.csrf = ""
-	c.params = accountParams{cursor: "null", spaceTotal: 1 << 30, spaceAvailable: 1 << 30}
+	c.params = accountParams{}
 }
 
 func (c *Client) resetReferralFinishAttempt() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.referral != nil || c.androidApp != nil {
-		c.registrationFinished = false
-	}
+	c.registrationFinished = false
 }
 
 // WebmasterTransferOptions selects the shared files and destination explicitly.
@@ -352,6 +298,9 @@ type WebmasterRegistrationResult struct {
 // registration after such an error; use TransferWebmasterReferral instead.
 func (c *Client) RegisterFinishWithReferral(ctx context.Context, regToken, password string, opts *WebmasterTransferOptions) (*WebmasterRegistrationResult, error) {
 	const op = "registerFinishWithReferral"
+	if err := c.requireAndroidApp(); err != nil {
+		return nil, wrapErr(op, err)
+	}
 	if c.WebmasterReferral() == nil {
 		return nil, wrapErr(op, errors.New("prepare a webmaster referral before registration"))
 	}
@@ -398,6 +347,9 @@ func validateWebmasterTransferOptions(opts *WebmasterTransferOptions) error {
 // registration again. Server task acceptance does not certify referral credit.
 func (c *Client) TransferWebmasterReferral(ctx context.Context, opts *WebmasterTransferOptions) (*ShareTransferResponse, error) {
 	const op = "transferWebmasterReferral"
+	if err := c.requireAndroidApp(); err != nil {
+		return nil, wrapErr(op, err)
+	}
 	if err := validateWebmasterTransferOptions(opts); err != nil {
 		return nil, wrapErr(op, err)
 	}

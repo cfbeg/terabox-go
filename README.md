@@ -1,71 +1,58 @@
 # terabox-go
 
-A Go client for TeraBox, ported from
-[seiya-npm/terabox-api](https://github.com/seiya-npm/terabox-api).
-Requires Go 1.21 or later and uses only the standard library.
-
-## Install
+Go client for the HTTP protocols used by TeraBox Android APK 4.26.5. It implements
+the app's Hy email registration/login and native account, sharing, and
+post-login configuration requests. Construct every client from a captured
+`AndroidAppProfile`; the SDK does not generate a device identity.
 
 ```sh
-go get github.com/cfbeg/terabox-go
+go get github.com/cfbeg/terabox-go@latest
 ```
-
-## Read account quota
-
-Set `TERABOX_NDUS` to the session's `ndus` cookie, then use a context to bound
-the operation:
 
 ```go
 package main
 
 import (
-	"context"
-	"fmt"
+	"encoding/json"
 	"log"
 	"os"
-	"time"
 
 	terabox "github.com/cfbeg/terabox-go"
 )
 
 func main() {
-	ndus := os.Getenv("TERABOX_NDUS")
-	if ndus == "" {
-		log.Fatal("TERABOX_NDUS is required")
-	}
-	client := terabox.NewClient(ndus)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	quota, err := client.GetQuota(ctx)
+	raw, err := os.ReadFile("android-profile.json")
 	if err != nil {
 		log.Fatal(err)
 	}
-	if quota.Errno != 0 {
-		log.Fatalf("quota API error: %d", quota.Errno)
+	var profile terabox.AndroidAppProfile
+	if err := json.Unmarshal(raw, &profile); err != nil {
+		log.Fatal("invalid Android app profile")
 	}
-	fmt.Printf("Used: %d bytes; available: %d bytes\n", quota.Used, quota.Available)
+	client, err := terabox.NewAndroidAppClient(profile)
+	if err != nil {
+		log.Fatal(err)
+	}
+	_ = client
 }
 ```
 
-`NewClient("")` creates an unauthenticated client for the passport flows.
-Save `CookieString()` and restore it with `WithCookies(savedCookies)` to retain
-browser/challenge state across restarts. A successful `PassportLogin` or
-`RegisterFinish` returns `NDUS`; pass it to `NewClient` for an authenticated client.
+The profile retains the app's CUID, version, UA, native and Hy channels,
+language, actual Hy page URL, and captured native common query maps. Guest
+UID/SK may be empty. To reuse an existing account, supply its privately stored
+cookie string with `WithCookies`; native UID is retained separately and is
+never inferred from the share owner's UK or an account-check UK.
 
-## Registration from a webmaster shared link
+## Registration from a shared link
 
-For an operational procedure that checks actual Webmaster acquisition credit,
-see the [Japanese registration and counting runbook](docs/WEBMASTER_REGISTRATION_RUNBOOK_JA.md).
-The official help describes app-based acquisition; Web API registration success
-alone does not establish reward eligibility.
-
-Prepare the shared-link context on a fresh, unauthenticated client **before**
-requesting an email code. Use the same client for all registration steps:
+Create one guest app client per registration and keep that client throughout:
 
 ```go
-client := terabox.NewClient("")
-referral, err := client.PrepareWebmasterReferralWithOptions(ctx, shareURL,
-	&terabox.WebmasterReferralOptions{Source: "web_share"})
+client, err := terabox.NewAndroidAppClient(profile)
+if err != nil {
+	return err
+}
+referral, err := client.PrepareWebmasterReferral(ctx, shareURL)
 if err != nil {
 	return err
 }
@@ -73,11 +60,10 @@ sent, err := client.RegisterSendCode(ctx, email)
 if err != nil {
 	return err
 }
-if sent.Code != 0 || sent.Errno != 0 {
+if sent.Code != 0 || sent.Errno != 0 || sent.Token == "" {
 	return fmt.Errorf("send code failed: code=%d errno=%d", sent.Code, sent.Errno)
 }
-
-// Obtain the verification code from the email, then continue on this client.
+// Save client.WebmasterRegistrationSession() before waiting for the email.
 verified, err := client.RegisterVerify(ctx, sent.Token, verificationCode)
 if err != nil {
 	return err
@@ -85,167 +71,68 @@ if err != nil {
 if verified.Code != 0 || verified.Errno != 0 {
 	return fmt.Errorf("verification failed: code=%d errno=%d", verified.Code, verified.Errno)
 }
-
-// Inspect referral.Files (or GetShareList) and explicitly select files to save.
-result, err := client.RegisterFinishWithReferral(ctx, sent.Token, password,
-	&terabox.WebmasterTransferOptions{
-		FSIDs: selectedFileIDs, Destination: "/", OnDup: "newcopy",
-	})
-if result != nil && result.Session != nil {
-	// Persist result.Session locally even if err != nil: registration may have
-	// succeeded while the subsequent transfer failed.
-}
+// Persist a Finish-in-progress record before making this request.
+finished, err := client.RegisterFinish(ctx, sent.Token, password)
+// Persist both the returned result and session before handling an error.
+saved := client.WebmasterRegistrationSession()
+_ = saved
 if err != nil {
 	return err
 }
-fmt.Printf("share %d, owner %d, transfer task %d\n",
-	referral.ShareID, referral.WebmasterUK, result.Transfer.TaskID)
-```
-
-The referral is opt-in; ordinary registration requests retain their existing
-behavior. Metadata is resolved through the current `/api/shorturlinfo` and
-`/share/list` APIs. Registration carries the selected shared-page `reg_source`,
-`first_referer`, HTTP Referer, and server-issued visitor cookies. On completion,
-the new NDUS is retained on the client and authenticated web tokens are refreshed
-before transferring the selected files.
-
-`PrepareWebmasterReferral` uses the default shared-page source `share`. The
-options variant can select `web_share`, as shown above: sendcode additionally
-carries `koltype=1`, while finish uses `reg_source=web_share` without `koltype`.
-`web_share_videoplay` is also supported. These are the distinct source mappings
-observed in the current Web dialog, not arbitrary attribution flags.
-
-For a restart between sending and verifying the email code, JSON-serialize
-`client.WebmasterRegistrationSession()`. Restore it with
-`freshClient.RestoreWebmasterRegistrationSession(saved)` before continuing.
-The snapshot includes cookies and the registration token, so store it as a
-credential. It does not contain the password or email verification code.
-
-`result.Registration` and `result.Transfer` describe separate operations.
-When registration succeeds but transfer fails, use
-`client.TransferWebmasterReferral(ctx, options)` to retry only the transfer.
-A malformed finish response with an NDUS retains that session with
-`RegistrationConfirmed=false`; the transfer helper checks login status before
-continuing. An ambiguous finish attempt is saved as `FinishAttempted=true` and
-blocks re-sending registration; check the account's status before taking further
-action. `OnDup` supports the verified `newcopy` policy only. Transfer task
-acceptance is distinct from completion and referral
-credit; no result field asserts that a webmaster acquisition was counted.
-
-The APK report's `share_from_surl` and `webmaster_uk` are retained in local
-referral metadata. They are not sent as unverified passport fields or invented
-cookies. See [API verification notes](docs/API_NOTES.md) for the distinction
-between Android and Web endpoints and the primary-source evidence.
-
-## Errors and HTTP behavior
-
-- Single-request API methods return server result codes in `Errno`, `Code`,
-  or `ErrorCode`. Check these fields even when the Go error is nil.
-- Multi-request operations stop on failed prerequisites. `errors.As` can
-  retrieve an `*terabox.APIError` and its original server `Code` from the
-  returned error. Transport and decoding errors remain wrapped in `*terabox.Error`.
-- Per-request timeouts and caller deadlines use whichever expires first.
-  Closing a response body releases the internal timeout context.
-- `WithHTTPClient` copies the supplied client's configuration. The package
-  handles redirects and cookies itself, so the supplied `CheckRedirect` and
-  `Jar` are not used or modified. Custom transports, proxies, and client timeouts
-  are retained.
-- Discovered endpoints must use HTTPS and belong to `terabox.com`. Additional
-  exact origins can be trusted explicitly with `WithWebHost` or `WithUploadHost`;
-  this also supports HTTP servers in local tests. Unrelated redirects and HTTPS
-  downgrades are rejected before credentials are sent.
-- Page refreshes validate their final response before committing cookies,
-  tokens, account state, or regional host changes. Login pages may refresh only
-  the passport token without erasing unrelated session tokens.
-
-## Android native signing
-
-`NewAndroidAppClient(profile, options...)` uses the APK's Android Hy email
-registration and native shared-file requests. Load `AndroidAppProfile` from an
-actual app capture: CUID, version, User-Agent, native channel, language, client
-type, Hy page URL, and the complete `NativeParams`/`LegacyNativeParams` query
-maps. The constructor does not contact TeraBox or generate a device identity.
-Guest UID and encrypted SK can be empty. Ordinary `NewClient` remains the Web
-client.
-
-```go
-client, err := terabox.NewAndroidAppClient(profile)
-if err != nil {
-	return err
+if finished.Code != 0 || finished.Errno != 0 || finished.NDUS == "" {
+	return fmt.Errorf("registration was not confirmed")
 }
-// The Android shared-page source is "share", rather than the Web dialog source.
-referral, err := client.PrepareWebmasterReferral(ctx, shareURL)
-if err != nil {
-	return err
-}
-_ = referral // Select files explicitly if a subsequent transfer is requested.
-// RegisterSendCode -> RegisterVerify -> RegisterFinish use the same app client.
-// Persist WebmasterRegistrationSession() before Finish and after its outcome.
+_ = referral // Inspect referral.Files and select transfer files explicitly.
 ```
 
-The app path fetches its captured `/wap/hylogin` page for PCF/cookies, uses
-native psign bootstrap and POST public-key requests, and accepts finish
-`data.ndus` plus the separate native `data.userid`. Its snapshots retain app
-identity even without a referral; fresh `RestoreWebmasterRegistrationSession`
-restores that protocol. App mode never bootstraps through `/main` or the Web
-`/wap/outlogin` pages. See [the APK request contract](docs/ANDROID_APP.md).
+The APK source is `share`. The Hy flow fetches the captured `/wap/hylogin`
+page for PCF/cookies, sends Android passport forms with native psign, and
+encrypts the password using the app's RSA scheme. Its password policy is
+8–20 characters and at least three character kinds. The mail-code screen uses
+four digits. Finish confirms native `data.ndus` and `data.userid` and retains
+the same account session on the client.
 
-After persisting a successful app registration, `RefreshAndroidAppConfig(ctx)`
-uses captured `ReportParams` and that account's native UID/NDUS to obtain its
-encoded signing key through native ReportUser. Save the updated session before
-transferring files. A refresh error leaves the registered account intact and
-can be retried independently from registration.
+After saving the account, `RefreshAndroidAppConfig(ctx)` performs the app's
+separate native ReportUser request using captured `ReportParams`. It validates
+and stores the account's encoded signing key. Refresh failure leaves the
+registered account intact and can be retried independently.
 
-`NewAndroidSigner` and `WithAndroidSigner` enable the APK-verified URLHandler
-signature on API requests and chunk uploads. Supply the app's runtime device
-ID, account UID, encrypted `net_param_sk`, and channel; these values cannot be
-inferred from an NDUS cookie alone. The signer adds a 40-character `rand` using
-millisecond time, Base64/RC4 secret decoding, and the native SHA-1 preimage.
+Use `TransferWebmasterReferral` to submit a selected native shared-file
+transfer. `RegisterFinishWithReferral` is a convenience combination that
+returns registration/session state even when the later transfer fails.
+Transfer acknowledgement, file-save completion, and Webmaster acquisition
+accounting are separate outcomes. The SDK does not assert acquisition credit.
+See the [Japanese operational runbook](docs/WEBMASTER_REGISTRATION_RUNBOOK_JA.md).
 
-The default client remains the existing Web client. Passport calls and HTML
-token refresh keep their existing behavior. Use `SetAndroidSigner` to replace
-the immutable profile after an account/config change or to disable it with nil.
-`ComputeAndroidSDKRand` also exposes the separately verified SDK-native digest.
+## Session recovery
 
-[Android signing documentation](docs/ANDROID_SIGNING.md) includes configuration,
-the actual formulas, corrected report assumptions, and a reproducible native
-verification script. Normal Go tests use checked-in native test vectors.
+JSON-serialize `WebmasterRegistrationSession()` privately. It includes the app
+profile, cookies, registration token, native UID/SK, and finish state, including
+registrations without a shared link. Restore it onto a fresh client created
+with the same captured identity through `RestoreWebmasterRegistrationSession`.
+Snapshots without an Android profile are rejected.
 
-## Uploads and synchronization
+A completed or ambiguous Finish attempt blocks repeating registration. Check
+the account state and retry only subsequent configuration or transfer work.
+A transfer response loss may conceal an accepted task; check the destination
+before repeating a `newcopy` transfer. Captcha errors preserve the request ID
+and captured Hy page; complete the app's verification with the same session.
 
-The upload API exposes individual steps: `HashFile`, `PrecreateFile`,
-`GetUploadHost`, `UploadChunks`, and `CreateFile`. Keep the returned hashes and
-upload ID in `UploadData`, and initialize `Uploaded` to one flag per chunk.
-Handle precreate result codes and `ReturnType` before proceeding with chunk upload.
+## HTTP and verification
 
-`HashFile` stores `FileHashes.ChunkSize`. Preserve it when saving hashes or
-resuming an upload so membership changes cannot alter part boundaries.
-A zero `ChunkSize` retains the legacy behavior of deriving it from the current
-account. `NoHashCheck` disables local hash calculation for unknown parts; a valid
-server MD5 is still required. An `UploadData` value must not be shared between
-concurrent upload calls.
+Result codes must be checked even when a Go error is nil. Prerequisite failures
+retain their `APIError.Code`. Caller deadlines and per-request timeouts use the
+earlier deadline. API origins are validated before sending credentials;
+`WithAPIHost` can explicitly trust a local test server. `WithHTTPClient` copies
+client settings while the SDK manages redirects/cookies itself. App transport
+errors omit request URLs that might contain captured bridge tokens.
 
-Empty local files have no chunks: `UploadChunks` performs no transfer, and
-precreate/create send `block_list=[]`. Remote empty-file acceptance has not
-been verified against the service.
+`go test ./...` and `go vet ./...` verify the checked-in APK request replay,
+native signing vectors, JSON precision, recovery, and HTTP boundary behavior.
+Tests use local/mock transports and do not create live accounts.
 
-`FileDiff` serializes calls on the same client and commits its cursor only
-after every page succeeds. A pagination or request failure resets the cursor
-for a full sync on the next call. Cancellation while waiting for another
-`FileDiff` call is checked after that call finishes.
-
-`GetRecentUploads` keeps its page argument for source compatibility but ignores
-it: pagination for `/rest/recent/listall` has not been verified.
-
-## Development
-
-```sh
-go test ./...
-go vet ./...
-go test -race ./...
-```
-
-Tests use mock transports, local HTTP servers, and temporary files; they do not
-require a live account. The race detector requires CGO and a C compiler.
-CI checks Go 1.21 and the current stable Go release on Linux and Windows, and
-runs the race detector on Linux.
+The [app request contract](docs/ANDROID_APP.md),
+[API evidence](docs/API_NOTES.md), and
+[native signing formulas](docs/ANDROID_SIGNING.md) record the inspected
+DEX/classes and APK scripts. Both older native and Retrofit request families
+remain because this APK uses both.

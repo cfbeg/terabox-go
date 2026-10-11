@@ -1,6 +1,5 @@
-// Package terabox provides an API client for the TeraBox cloud storage
-// service. It is a Go port of github.com/seiya-npm/terabox-api with
-// improvements for concurrency safety, resource usage, and context support.
+// Package terabox implements the APK-derived Android Hy registration and
+// native shared-link protocols. A captured Android profile is required.
 //
 // The client uses only the Go standard library.
 package terabox

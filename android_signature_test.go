@@ -1,19 +1,11 @@
 package terabox
 
 import (
-	"bytes"
-	"context"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
-	"io"
-	"net/http"
-	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"testing"
-	"time"
 )
 
 type androidSignatureFixtures struct {
@@ -41,7 +33,7 @@ func androidSignatureLoadFixtures(t *testing.T) androidSignatureFixtures {
 func androidSignatureConfig() AndroidSigningConfig {
 	return AndroidSigningConfig{
 		DeviceID: "device-id-123", UID: "12345", EncodedSK: "I1BbEElqIRzyRLrZtgH/fZwf",
-		Version: "4.26.5", Channel: "android_14_TestDevice_bd-dubox_web", UserAgent: "captured-android-agent",
+		Version: "4.26.5",
 	}
 }
 
@@ -176,8 +168,6 @@ func TestAndroidSigningRejectsInvalidConfigAndInputs(t *testing.T) {
 		func(c *AndroidSigningConfig) { c.DeviceID = invalidUTF8 },
 		func(c *AndroidSigningConfig) { c.UID = invalidUTF8 },
 		func(c *AndroidSigningConfig) { c.Version = invalidUTF8 },
-		func(c *AndroidSigningConfig) { c.Channel = "bad\r\nchannel" },
-		func(c *AndroidSigningConfig) { c.UserAgent = "bad\nagent" },
 	} {
 		cfg := androidSignatureConfig()
 		change(&cfg)
@@ -199,264 +189,6 @@ func TestAndroidSigningRejectsInvalidConfigAndInputs(t *testing.T) {
 	}
 }
 
-func androidSignatureCheckRequest(t *testing.T, req *http.Request, signer *AndroidSigner, cfg AndroidSigningConfig, earliest int64) {
-	t.Helper()
-	query := req.URL.Query()
-	if query.Get("devuid") != cfg.DeviceID || query.Get("cuid") != cfg.DeviceID || query.Get("clienttype") != "1" || query.Get("channel") != cfg.Channel || query.Has("web") {
-		t.Errorf("Android common query is wrong: %v", query)
-	}
-	if query.Get("version") != cfg.Version || req.Header.Get("User-Agent") != cfg.UserAgent {
-		t.Errorf("Android version/UA = %q/%q, want %q/%q", query.Get("version"), req.Header.Get("User-Agent"), cfg.Version, cfg.UserAgent)
-	}
-	timestamp, err := strconv.ParseInt(query.Get("time"), 10, 64)
-	if err != nil || timestamp < earliest || timestamp > time.Now().UnixMilli() {
-		t.Errorf("time = %q, want current epoch milliseconds", query.Get("time"))
-	}
-	ndus := ""
-	if cookie, err := req.Cookie("ndus"); err == nil {
-		ndus = cookie.Value
-	}
-	actual := req.URL.String()
-	unsigned := strings.TrimSuffix(actual, "&rand="+query.Get("rand"))
-	expected, err := signer.SignURL(unsigned, ndus)
-	if err != nil || query.Get("rand") == "" || actual != expected {
-		t.Errorf("request signature disagrees with its cookie snapshot: actual=%s expected=%s error=%v", actual, expected, err)
-	}
-}
-
-func TestAndroidSignerJSONIntegrationKeepsFormBody(t *testing.T) {
-	cfg := androidSignatureConfig()
-	signer := androidSignatureSigner(t, cfg)
-	earliest := time.Now().UnixMilli()
-	calls := 0
-	client := NewClient("ndus-ascii", WithAndroidSigner(signer), WithHTTPClient(&http.Client{Transport: authTestTransport(func(req *http.Request) (*http.Response, error) {
-		calls++
-		androidSignatureCheckRequest(t, req, signer, cfg, earliest)
-		switch req.URL.Path {
-		case "/api/quota":
-			return authTestJSON(req, `{"errno":0,"total":1000,"used":1}`), nil
-		case "/api/create":
-			body, err := io.ReadAll(req.Body)
-			if err != nil {
-				return nil, err
-			}
-			form, err := url.ParseQuery(string(body))
-			if err != nil || form.Get("path") != "/directory with spaces" || form.Get("isdir") != "1" || form.Get("block_list") != "[]" || req.ContentLength != int64(len(body)) {
-				t.Errorf("signing changed form body or content length: %q length=%d error=%v", body, req.ContentLength, err)
-			}
-			return authTestJSON(req, `{"errno":0,"fs_id":123}`), nil
-		default:
-			return nil, errors.New("unexpected signed JSON endpoint")
-		}
-	})}))
-	if _, err := client.GetQuota(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := client.CreateDir(context.Background(), "/directory with spaces"); err != nil {
-		t.Fatal(err)
-	}
-	if calls != 2 {
-		t.Fatalf("signed JSON requests=%d, want 2", calls)
-	}
-}
-
-type androidSignatureCountingReader struct {
-	*bytes.Reader
-	reads int
-}
-
-func (r *androidSignatureCountingReader) Read(p []byte) (int, error) {
-	r.reads++
-	return r.Reader.Read(p)
-}
-
-func TestAndroidSignerUploadChunkRetainsStreamingBody(t *testing.T) {
-	cfg := androidSignatureConfig()
-	signer := androidSignatureSigner(t, cfg)
-	content := bytes.Repeat([]byte("streamed chunk content"), 4096)
-	src := &androidSignatureCountingReader{Reader: bytes.NewReader(content)}
-	earliest := time.Now().UnixMilli()
-	client := NewClient("ndus-ascii", WithAndroidSigner(signer), WithHTTPClient(&http.Client{Transport: authTestTransport(func(req *http.Request) (*http.Response, error) {
-		if src.reads != 0 {
-			t.Error("signing buffered the chunk before handing the request to the transport")
-		}
-		androidSignatureCheckRequest(t, req, signer, cfg, earliest)
-		if req.URL.Path != "/rest/2.0/pcs/superfile2" || req.URL.Query().Get("uploadid") != "local-upload" || req.ContentLength <= int64(len(content)) {
-			t.Errorf("signed upload target/content length changed: %s, length=%d", req.URL, req.ContentLength)
-		}
-		reader, err := req.MultipartReader()
-		if err != nil {
-			return nil, err
-		}
-		part, err := reader.NextPart()
-		if err != nil {
-			return nil, err
-		}
-		got, err := io.ReadAll(part)
-		if err != nil || part.FormName() != "file" || !bytes.Equal(got, content) || src.reads == 0 {
-			t.Errorf("streamed chunk changed: bytes=%d error=%v reads=%d", len(got), err, src.reads)
-		}
-		if _, err := reader.NextPart(); err != io.EOF {
-			t.Errorf("multipart upload ended incorrectly: %v", err)
-		}
-		return authTestJSON(req, `{"error_code":0,"md5":"`+uploadTestMD5(content)+`"}`), nil
-	})}))
-	if _, err := client.UploadChunk(context.Background(), uploadTestData(content, int64(len(content))), 0, src, int64(len(content))); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestAndroidSignerKeepsWebPassportAndHTMLRequests(t *testing.T) {
-	// A missing Android channel would reject any signed request, so this also
-	// detects accidental signing of the deliberately preserved Web flows.
-	cfg := androidSignatureConfig()
-	cfg.Channel = ""
-	signer := androidSignatureSigner(t, cfg)
-	client := NewClient("ndus-ascii", WithAndroidSigner(signer), WithHTTPClient(&http.Client{Transport: authTestTransport(func(req *http.Request) (*http.Response, error) {
-		query := req.URL.Query()
-		if query.Has("rand") || query.Has("devuid") || query.Has("time") || req.Header.Get("User-Agent") != defaultUserAgent {
-			t.Errorf("Android profile changed preserved Web request: %s UA=%q", req.URL, req.Header.Get("User-Agent"))
-		}
-		switch req.URL.Path {
-		case "/main":
-			return authTestJSON(req, clientPage), nil
-		case "/passport/register_v4/sendcode":
-			if err := req.ParseForm(); err != nil {
-				return nil, err
-			}
-			if req.PostForm.Get("client") != "web" || req.PostForm.Get("pass_version") != "2.8" {
-				t.Errorf("Android signer changed the Web passport form: %v", req.PostForm)
-			}
-			return authTestJSON(req, `{"code":0,"token":"registration-token"}`), nil
-		default:
-			return nil, errors.New("unexpected preserved Web endpoint")
-		}
-	})}))
-	if _, err := client.UpdateAppData(context.Background(), ""); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := client.RegisterSendCode(context.Background(), "test@example.invalid"); err != nil {
-		t.Fatal(err)
-	}
-	for _, path := range []string{"/passport/prelogin", "/api/passport/nested"} {
-		req, _ := http.NewRequest(http.MethodGet, "https://www.terabox.com"+path+"?web=1", nil)
-		got, err := client.signAndroidRequest(req)
-		if err != nil || got != req {
-			t.Errorf("exact passport path segment was not excluded: path=%s request=%v error=%v", path, got, err)
-		}
-	}
-}
-
-func TestAndroidSignerRequiresChannelBeforeTransport(t *testing.T) {
-	cfg := androidSignatureConfig()
-	cfg.Channel = ""
-	signer := androidSignatureSigner(t, cfg)
-	calls := 0
-	client := NewClient("ndus-ascii", WithAndroidSigner(signer), WithHTTPClient(&http.Client{Transport: authTestTransport(func(*http.Request) (*http.Response, error) {
-		calls++
-		return nil, errors.New("must not reach transport")
-	})}))
-	if _, err := client.GetQuota(context.Background()); err == nil {
-		t.Error("missing runtime channel was accepted by JSON integration")
-	}
-	src := &androidSignatureCountingReader{Reader: bytes.NewReader([]byte("abc"))}
-	if _, err := client.UploadChunk(context.Background(), uploadTestData([]byte("abc"), 3), 0, src, 3); err == nil {
-		t.Error("missing runtime channel was accepted by chunk integration")
-	}
-	if calls != 0 || src.reads != 0 {
-		t.Errorf("invalid profile sent/read a chunk: requests=%d reads=%d", calls, src.reads)
-	}
-	// Only an exact segment excludes passport; a substring is not enough.
-	req, _ := http.NewRequest(http.MethodGet, "https://www.terabox.com/api/passportish", nil)
-	if _, err := client.signAndroidRequest(req); err == nil {
-		t.Error("passport substring incorrectly bypassed Android profile validation")
-	}
-}
-
-func TestAndroidSignerSessionRotationSwapAndDisable(t *testing.T) {
-	cfg := androidSignatureConfig()
-	signer := androidSignatureSigner(t, cfg)
-	activeSigner, activeConfig := signer, cfg
-	earliest := time.Now().UnixMilli()
-	quotaCalls := 0
-	client := NewClient("first-session", WithAndroidSigner(signer), WithHTTPClient(&http.Client{Transport: authTestTransport(func(req *http.Request) (*http.Response, error) {
-		switch req.URL.Path {
-		case "/main":
-			if req.URL.Query().Has("rand") || req.Header.Get("User-Agent") != defaultUserAgent {
-				t.Error("session rotation was routed through Android signing")
-			}
-			response := authTestJSON(req, clientPage)
-			response.Header.Add("Set-Cookie", "ndus=rotated-session; Path=/; Secure")
-			return response, nil
-		case "/api/quota":
-			quotaCalls++
-			androidSignatureCheckRequest(t, req, activeSigner, activeConfig, earliest)
-			wantCookie := "rotated-session"
-			if quotaCalls == 1 {
-				wantCookie = "first-session"
-			}
-			cookie, err := req.Cookie("ndus")
-			if err != nil || cookie.Value != wantCookie {
-				t.Errorf("request did not use current session: got=%v error=%v, want %q", cookie, err, wantCookie)
-			}
-			return authTestJSON(req, `{"errno":0}`), nil
-		case "/rest/recent/listall":
-			query := req.URL.Query()
-			if query.Has("rand") || query.Has("time") || query.Has("devuid") || query.Get("web") != "1" || query.Get("clienttype") != "0" || query.Get("channel") != "dubox" || req.Header.Get("User-Agent") != defaultUserAgent {
-				t.Errorf("disabled signer did not restore Web behavior: %s UA=%q", req.URL, req.Header.Get("User-Agent"))
-			}
-			return authTestJSON(req, `{"errno":0,"list":[]}`), nil
-		default:
-			return nil, errors.New("unexpected signer-rotation endpoint")
-		}
-	})}))
-	if _, err := client.GetQuota(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := client.UpdateAppData(context.Background(), ""); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := client.GetQuota(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	activeConfig.UID, activeConfig.EncodedSK, activeConfig.DeviceID = "54321", "NWleEZ2wD6ajaQ5TsfCHgA==", "different-device"
-	activeSigner = androidSignatureSigner(t, activeConfig)
-	client.SetAndroidSigner(activeSigner)
-	if _, err := client.GetQuota(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	client.SetAndroidSigner(nil)
-	if _, err := client.GetRecentUploads(context.Background(), 1); err != nil {
-		t.Fatal(err)
-	}
-	if quotaCalls != 3 {
-		t.Fatalf("signed quota calls=%d, want 3", quotaCalls)
-	}
-}
-
-func TestAndroidSignerUsesRequestCookieSnapshot(t *testing.T) {
-	signer := androidSignatureSigner(t, androidSignatureConfig())
-	// Model a concurrent session refresh after a request took its cookies:
-	// the client already has the new value while this request retains the old.
-	client := NewClient("new-session", WithAndroidSigner(signer))
-	req, _ := http.NewRequest(http.MethodGet, "https://www.terabox.com/api/quota?time=1700000000123&version=4.26.5", nil)
-	req.Header.Set("Cookie", "ndus=old-request-session")
-	signed, err := client.signAndroidRequest(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	actual := signed.URL.String()
-	unsigned := strings.TrimSuffix(actual, "&rand="+signed.URL.Query().Get("rand"))
-	expected, err := signer.SignURL(unsigned, "old-request-session")
-	if err != nil || actual != expected || signed.Header.Get("Cookie") != req.Header.Get("Cookie") {
-		t.Fatalf("signature/header snapshot diverged: actual=%s expected=%s error=%v cookie=%q", actual, expected, err, signed.Header.Get("Cookie"))
-	}
-	other, err := signer.SignURL(unsigned, "new-session")
-	if err != nil || actual == other {
-		t.Fatal("signature used the refreshed client cookie instead of the request cookie")
-	}
-}
-
 func TestAndroidSDKRandDefaultCertificateMatchesNativeOracle(t *testing.T) {
 	fixtures := androidSignatureLoadFixtures(t)
 	for _, vector := range fixtures.Vectors {
@@ -473,25 +205,4 @@ func TestAndroidSDKRandDefaultCertificateMatchesNativeOracle(t *testing.T) {
 		return
 	}
 	t.Fatal("SDK ASCII certificate oracle is missing")
-}
-
-func TestAndroidSignerPreservesEndpointParametersAndDefaultsVersion(t *testing.T) {
-	cfg := androidSignatureConfig()
-	cfg.Version = ""
-	signer := androidSignatureSigner(t, cfg)
-	client := NewClient("ndus-ascii", WithAndroidSigner(signer))
-	req, _ := http.NewRequest(http.MethodGet, "https://www.terabox.com/api/list?time=1234567890123&version=endpoint-version&rand=upstream-token&web=1", nil)
-	signed, err := client.signAndroidRequest(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	query := signed.URL.Query()
-	if query.Get("time") != "1234567890123" || query.Get("version") != "endpoint-version" || query.Get("rand") != "upstream-token" || len(query["rand"]) != 1 || query.Has("web") {
-		t.Fatalf("endpoint time/version/rand was overwritten or duplicated: %v", query)
-	}
-	req, _ = http.NewRequest(http.MethodGet, "https://www.terabox.com/api/list", nil)
-	signed, err = client.signAndroidRequest(req)
-	if err != nil || signed.URL.Query().Get("version") != AndroidAPKVersion {
-		t.Fatalf("missing version did not use inspected APK default: request=%v error=%v", signed, err)
-	}
 }
