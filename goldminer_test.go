@@ -13,7 +13,7 @@ import (
 
 const minerStatusFixture = `{"errno":0,"data":{"free_times_left":"2","buy_times_left":5,"price":"100"}}`
 
-func TestMinerRequestsMatchOfficialH5Contract(t *testing.T) {
+func TestMinerNDUSRequestsAndMinimalFinishContract(t *testing.T) {
 	paths := []string{"/rest/1.0/imact/miner/pull", "/rest/1.0/inte/system/getrecord",
 		"/rest/1.0/imact/miner/start", "/rest/1.0/imact/miner/getitem", "/rest/1.0/imact/miner/finishgame"}
 	next := 0
@@ -57,9 +57,7 @@ func TestMinerRequestsMatchOfficialH5Contract(t *testing.T) {
 				}
 				return shareJSONResponse(req, `{"errno":0,"data":{"result":{"reward_kind":"9","size":"9007199254740993","origin":"7","expire_day":0,"reason_code":"11"}}}`), nil
 			case 4:
-				want := url.Values{"game_id": {"9007199254740993"}, "devuid": {profile.DeviceID}, "cuid": {profile.DeviceID},
-					"version": {"4.26.5"}, "clienttype": {"1"}, "lang": {"ja"}, "channel": {profile.UserAgent},
-					"time": {"1700000000123"}, "rand": {"0"}, "zid": {""}}
+				want := url.Values{"game_id": {"9007199254740993"}, "app_id": {"250528"}, "web": {"1"}, "clienttype": {"1"}}
 				if !reflect.DeepEqual(query, want) {
 					t.Fatalf("finish parameters=%v, want=%v", query, want)
 				}
@@ -114,7 +112,8 @@ func TestMinerFinishUsesNativeAPKSigner(t *testing.T) {
 	profile.UID, profile.EncodedSK = fixture.UID, fixture.EncodedSK
 	client, err := NewAndroidAppClient(profile, WithCookies("ndus="+fixture.NDUS),
 		WithHTTPClient(&http.Client{Transport: shareRoundTripFunc(func(req *http.Request) (*http.Response, error) {
-			if req.URL.Query().Get("rand") != fixture.ExpectedRand || req.URL.Query().Get("time") != fixture.Time {
+			want := url.Values{"game_id": {"fixture-game"}, "devuid": {fixture.DeviceID}, "cuid": {fixture.DeviceID}, "version": {fixture.Version}, "clienttype": {"1"}, "lang": {profile.Language}, "channel": {profile.UserAgent}, "time": {fixture.Time}, "rand": {fixture.ExpectedRand}, "zid": {""}}
+			if !reflect.DeepEqual(req.URL.Query(), want) {
 				t.Fatal("finish signature does not match the actual APK oracle")
 			}
 			return shareJSONResponse(req, minerStatusFixture), nil
@@ -129,6 +128,44 @@ func TestMinerFinishUsesNativeAPKSigner(t *testing.T) {
 	client.androidApp.now = func() time.Time { return time.UnixMilli(ms) }
 	if _, err := client.MinerFinish(context.Background(), "fixture-game"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMinerFinishRejectsMissingSuccessAndNeverSwitchesRequestShape(t *testing.T) {
+	for _, signed := range []bool{false, true} {
+		for _, body := range []string{`{"errno":21,"errmsg":"invalid sign","data":{}}`, `{"data":{"free_times_left":0,"buy_times_left":100,"price":9}}`, `{"errno":0,"data":{}}`} {
+			profile := androidFixtureProfile()
+			if signed {
+				for _, fixture := range androidSignatureLoadFixtures(t).Vectors {
+					if fixture.Algorithm == "legacy" && fixture.Name == "ascii" {
+						profile.DeviceID, profile.Version, profile.UID, profile.EncodedSK = fixture.DeviceID, fixture.Version, fixture.UID, fixture.EncodedSK
+						break
+					}
+				}
+			}
+			calls := 0
+			client, err := NewAndroidAppClient(profile, WithCookies("ndus=fixture-session"), WithHTTPClient(&http.Client{Transport: shareRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+				calls++
+				query := request.URL.Query()
+				if query.Has("rand") != signed || query.Has("app_id") == signed {
+					t.Fatal("finish selected a different authentication contract")
+				}
+				return shareJSONResponse(request, body), nil
+			})}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = client.MinerFinish(context.Background(), "fixture-game")
+			if err == nil || calls != 1 {
+				t.Fatal("finish accepted unconfirmed success or replayed the operation")
+			}
+			if strings.Contains(body, `"errno":21`) {
+				var api *APIError
+				if !errors.As(err, &api) || api.Code != 21 {
+					t.Fatal("finish lost the server's result code")
+				}
+			}
+		}
 	}
 }
 

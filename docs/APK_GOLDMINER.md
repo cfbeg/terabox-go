@@ -37,7 +37,8 @@ parameters; only calls with `checkRand` receive native bridge values.
 | `GoldRecord` | `/rest/1.0/inte/system/getrecord` | none | `can_used_cnt` |
 | `MinerStart` | `/rest/1.0/imact/miner/start` | none | `game_id`, `map_id`, `map_info.items` |
 | `MinerGetItem` | `/rest/1.0/imact/miner/getitem` | `game_id`, `object_type`, `report_id` | `result` |
-| `MinerFinish` | `/rest/1.0/imact/miner/finishgame` | `game_id` plus bridge fields below | `free_times_left`, `buy_times_left`, `price` |
+| `MinerFinish` (SK present) | `/rest/1.0/imact/miner/finishgame` | `game_id` plus bridge fields below | `free_times_left`, `buy_times_left`, `price` |
+| `MinerFinish` (NDUS only) | same | `game_id`, `app_id=250528`, `web=1`, `clienttype=1` | same |
 | `MinerQueryVideo` | `/rest/1.0/imact/miner/queryvideo` | `game_id`, `video_type`, and `object_id` for type 0 | raw poll `data` |
 | `MinerPuzzleQuery` | `/rest/1.0/imact/puzzle/query` | none | `can_receive` and complete raw puzzle data |
 
@@ -49,10 +50,34 @@ finish call at 816194 explicitly updates all three allowance/price fields.
 
 The SDK's five methods use a separate H5 transport. The native Retrofit wrapper
 would add a different parameter set and does not describe these requests. The
-game calls do not use Hy-login tokens, `psign`, `jsToken`, `app_id`, `web`, CK
+normal game calls do not use Hy-login tokens, `psign`, `jsToken`, `app_id`, `web`, CK
 fields, coordinates or guessed fallback query combinations. The SDK preserves
 the captured account cookie session and uses the miner page as its Referer.
 No additional page bootstrap is necessary for these five endpoint contracts.
+
+### NDUS-only compatibility
+
+The source Bun client first sent a minimal finish query containing `game_id`,
+`app_id`, `web` and `clienttype`. The SDK now chooses this request directly when
+the saved profile has no SK, keeping the captured Android UA, NDUS cookie and
+Android clienttype 1. This is a source-client compatibility contract, rather
+than the bundled game's usual `r2/checkRand` request.
+
+A controlled service comparison used the same unfinished game, UA, NDUS and
+clienttype 1. The bridge query with `rand=0` returned explicit errno 21 and
+errmsg `invalid sign`. The minimal query returned explicit errno 0 with the
+allowance/price/rewards data. Neither a browser UA nor clienttype 5 nor a new
+password login was needed. No page bootstrap occurred between the two calls.
+The full comparison changes the query shape; it does not isolate every omitted
+field separately. Evidence is saved locally under
+`C:/Projects/terabox-coin-miner/.state/finish-investigation`.
+
+The SDK selects the query before sending its single request: minimal when SK
+is absent, signed bridge when SK is present. It never tries another shape after
+a transport or server failure. Response success still requires an explicit
+zero result code and validated allowance/price data.
+An independent fresh free round also completed with no native UID/SK and no
+password login: start, 20 item reports and minimal finish all succeeded.
 
 ### Finish bridge
 
@@ -71,7 +96,7 @@ clienttype=1
 lang=<captured language>
 channel=<WebView User-Agent>
 time=<decimal Unix milliseconds>
-rand=<APK URLHandler signature, or 0 without native SK>
+rand=<APK URLHandler signature>
 zid=
 ```
 
@@ -82,6 +107,9 @@ page setting and is not used. `getZtoken` returns an empty token in the analyzed
 APK. Authenticated `rand` uses the existing URLHandler signing implementation,
 captured device/UID/SK/version, account NDUS and the exact request timestamp;
 its test compares against a native APK oracle vector.
+The APK's bridge itself defaults missing rand to zero, but sending that value
+to the finish endpoint was rejected by the service in the NDUS-only test.
+The SDK therefore uses the verified minimal request in that case.
 
 ## Decoding and failure behavior
 
@@ -138,7 +166,8 @@ fields and integer precision. It does not invoke `/imact/puzzle/receive`.
 ## Validation
 
 `goldminer_test.go` uses local HTTP fixtures for all seven requests, exact empty
-and three-field queries, captured cookies/UA, bridge fields/signature, numeric
+and three-field queries, unsigned finish's exact four fields, captured cookies/UA,
+signed finish's complete bridge fields/signature, numeric
 and numeric-string IDs above 2^53, finite map values, optional tool quantity,
 malformed/missing data, error-code preservation, response redaction and absence
 of mutation retries. Additional fixtures cover the three video types, null poll

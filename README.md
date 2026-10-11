@@ -131,7 +131,10 @@ and captured Hy page; complete the app's verification with the same session.
 `MinerPull`, `GoldRecord`, `MinerStart`, `MinerGetItem`, and `MinerFinish`
 implement the Gold Miner page opened by the APK. The game's H5 calls use its
 actual cookie session and app UA; native Retrofit parameters are not added to
-these requests. Finish obtains its `rand` from the verified native bridge.
+these requests. With a saved SK, finish obtains its `rand` from the verified
+native bridge. NDUS-only sessions use the minimal finish query restored from
+the working source client and verified on the service, retaining Android
+clienttype 1 and the captured app UA.
 Game IDs and reward values retain integer precision. Start, item and finish
 send one request each, with no alternate parameter combinations or retries.
 `MinerQueryVideo` preserves a single video-result poll's data after external

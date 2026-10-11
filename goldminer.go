@@ -129,7 +129,8 @@ func (c *Client) MinerGetItem(ctx context.Context, gameID string, objectType int
 	return result, wrapErr(op, err)
 }
 
-// MinerFinish finishes one game with the APK's getRand native bridge signature.
+// MinerFinish finishes one game. Saved SK uses the APK's getRand signature;
+// an NDUS-only session uses the verified minimal H5 compatibility contract.
 // It sends one request and does not try alternate parameter combinations.
 func (c *Client) MinerFinish(ctx context.Context, gameID string) (*MinerFinishResponse, error) {
 	const op = "minerFinish"
@@ -140,15 +141,18 @@ func (c *Client) MinerFinish(ctx context.Context, gameID string) (*MinerFinishRe
 		return nil, wrapErr(op, err)
 	}
 	profile := *c.AndroidAppProfile()
-	timestamp := c.androidAppTime()
-	rand, err := c.androidH5Rand(profile, timestamp)
-	if err != nil {
-		return nil, wrapErr(op, err)
+	query := url.Values{"game_id": {gameID}, "app_id": {"250528"}, "web": {"1"}, "clienttype": {strconv.Itoa(profile.ClientType)}}
+	if profile.EncodedSK != "" {
+		timestamp := c.androidAppTime()
+		rand, err := c.androidH5Rand(profile, timestamp)
+		if err != nil {
+			return nil, wrapErr(op, err)
+		}
+		query = url.Values{"game_id": {gameID}, "devuid": {profile.DeviceID}, "cuid": {profile.DeviceID},
+			"version": {profile.Version}, "clienttype": {strconv.Itoa(profile.ClientType)},
+			"lang": {profile.Language}, "channel": {profile.UserAgent},
+			"time": {strconv.FormatInt(timestamp, 10)}, "rand": {rand}, "zid": {""}}
 	}
-	query := url.Values{"game_id": {gameID}, "devuid": {profile.DeviceID}, "cuid": {profile.DeviceID},
-		"version": {profile.Version}, "clienttype": {strconv.Itoa(profile.ClientType)},
-		"lang": {profile.Language}, "channel": {profile.UserAgent},
-		"time": {strconv.FormatInt(timestamp, 10)}, "rand": {rand}, "zid": {""}}
 	data, err := c.minerH5GET(ctx, op, "/rest/1.0/imact/miner/finishgame", query)
 	if err != nil {
 		return nil, err
