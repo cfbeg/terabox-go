@@ -344,6 +344,7 @@ func TestAndroidAppPSignUsesNativePubkeyAndFallback(t *testing.T) {
 	for _, fail := range []bool{false, true} {
 		profile := androidFixtureProfile()
 		profile.PSign = ""
+		profile.LegacyNativeParams = map[string]string{"startDevTime": "old-request", "firstlaunchtime": "1791600000"}
 		calls := 0
 		client, _ := NewAndroidAppClient(profile, WithHTTPClient(&http.Client{Transport: shareRoundTripFunc(func(req *http.Request) (*http.Response, error) {
 			calls++
@@ -354,11 +355,15 @@ func TestAndroidAppPSignUsesNativePubkeyAndFallback(t *testing.T) {
 			if req.PostForm.Get("client") != "android" || req.PostForm.Get("pass_version") != "2.0" {
 				t.Fatal("native psign bootstrap did not use its 2.0 passport family")
 			}
+			if req.URL.Query().Get("startDevTime") != "1791680000123" || req.URL.Query().Get("firstlaunchtime") != "1791600000" {
+				t.Fatal("native psign reused a request timestamp or changed the installation's first launch")
+			}
 			if fail {
 				return shareJSONResponse(req, `{"code":19}`), nil
 			}
 			return shareJSONResponse(req, `{"code":0,"data":{"pp3":"fixture-native-pp3"}}`), nil
 		})}))
+		client.androidApp.now = func() time.Time { return time.UnixMilli(1791680000123) }
 		if err := client.resolveAndroidPSign(context.Background()); err != nil {
 			t.Fatal(err)
 		}
@@ -369,6 +374,26 @@ func TestAndroidAppPSignUsesNativePubkeyAndFallback(t *testing.T) {
 		if client.AndroidAppProfile().PSign != androidPSign(profile.DeviceID, pp3) || calls != 1 {
 			t.Fatal("native psign hash/fallback changed")
 		}
+	}
+}
+
+func TestAndroidAppNativeRequestTimeDoesNotReuseCapturedStartupTime(t *testing.T) {
+	profile := androidFixtureProfile()
+	profile.NativeParams = map[string]string{"startDevTime": "1", "firstlaunchtime": "1791600000"}
+	profile.LegacyNativeParams = map[string]string{"startDevTime": "1", "firstlaunchtime": "1791600000"}
+	client, _ := NewAndroidAppClient(profile)
+	for _, timestamp := range []int64{1791680000123, 1791680001123} {
+		client.androidApp.now = func() time.Time { return time.UnixMilli(timestamp) }
+		for _, path := range []string{"/share/list", "/api/shorturlinfo", "/api/report/user", "/api/account/uinfo"} {
+			request, _ := http.NewRequest(http.MethodGet, "https://www.terabox.com"+path, nil)
+			sent, err := client.androidAppAPIRequest(request)
+			if err != nil || sent.URL.Query().Get("startDevTime") != strconv.FormatInt(timestamp, 10) || sent.URL.Query().Get("firstlaunchtime") != "1791600000" {
+				t.Fatal("native request reused the captured request time or changed the installation's first launch")
+			}
+		}
+	}
+	if client.AndroidAppProfile().NativeParams["startDevTime"] != "1" || client.AndroidAppProfile().LegacyNativeParams["startDevTime"] != "1" {
+		t.Fatal("request construction mutated the saved installation profile")
 	}
 }
 

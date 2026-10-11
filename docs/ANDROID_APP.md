@@ -13,7 +13,9 @@ country or native UID is generated or inferred.
 `native_params` contains the captured Retrofit common query map;
 `legacy_native_params` contains the older native map used by shorturlinfo,
 native public-key bootstrap and ReportUser. Both are actual APK request
-families. Per-request identity/time are refreshed from the profile. Native
+families. Per-request identity/time are refreshed from the profile. The native
+builders obtain `startDevTime` from currentTimeMillis for every request;
+`firstlaunchtime` remains the installation's cached first-launch seconds. Native
 log IDs are raw standard Base64 of
 `timeMillis,capturedNonLoopbackIP,random0..999998`.
 Hy `ck_data` and transfer `native_ck_data` belong to separate native providers.

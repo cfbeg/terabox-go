@@ -291,6 +291,11 @@ func (c *Client) androidAppAPIRequest(req *http.Request) (*http.Request, error) 
 	query.Set("lang", profile.Language)
 	timestamp := c.androidAppTime()
 	query.Set("time", strconv.FormatInt(timestamp, 10))
+	if query.Has("startDevTime") {
+		// Both APK native builders obtain this field from currentTimeMillis;
+		// firstlaunchtime remains the installation's cached first-launch value.
+		query.Set("startDevTime", strconv.FormatInt(timestamp, 10))
+	}
 	if captured := query.Get("logid"); captured != "" {
 		logID, err := refreshAndroidLogID(captured, timestamp)
 		if err != nil {
@@ -387,6 +392,9 @@ func (c *Client) resolveAndroidPSign(ctx context.Context) error {
 	query.Del("rand")
 	timestamp := c.androidAppTime()
 	query.Set("time", strconv.FormatInt(timestamp, 10))
+	if query.Has("startDevTime") {
+		query.Set("startDevTime", strconv.FormatInt(timestamp, 10))
+	}
 	if captured := query.Get("logid"); captured != "" {
 		logID, err := refreshAndroidLogID(captured, timestamp)
 		if err != nil {
