@@ -212,13 +212,18 @@ func (c *Client) androidH5Rand(profile AndroidAppProfile, timestamp int64) (stri
 
 func (c *Client) androidH5Query() (url.Values, error) {
 	profile := *c.AndroidAppProfile()
+	page, _ := url.Parse(profile.PageURL)
+	channel := page.Query().Get("channel")
+	if channel == "" {
+		channel = profile.UserAgent
+	}
 	timestamp := c.androidAppTime()
 	rand, err := c.androidH5Rand(profile, timestamp)
 	if err != nil {
 		return nil, err
 	}
 	query := url.Values{"language_type": {""}, "app_id": {"250528"}, "web": {"1"},
-		"clienttype": {strconv.Itoa(profile.ClientType)}, "channel": {profile.Channel},
+		"clienttype": {strconv.Itoa(profile.ClientType)}, "channel": {channel},
 		"version": {profile.Version}, "devuid": {profile.DeviceID}, "cuid": {profile.DeviceID},
 		"lang": {profile.Language}, "time": {strconv.FormatInt(timestamp, 10)}, "rand": {rand},
 		"zid": {""}, "jsToken": {c.dataSnapshot().jsToken}}

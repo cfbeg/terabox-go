@@ -96,6 +96,17 @@ func TestAndroidAppRegistrationMatchesAPKReplay(t *testing.T) {
 		}
 		index := map[string]int{steps[1]: 0, steps[2]: 1, steps[4]: 2}[req.URL.Path]
 		want := expected[index]
+		// The older fixture executes builders without UI navigation. The full
+		// UI replay in android_hy_route_wire.json covers the changing document.
+		if index > 0 {
+			want.Params["channel"] = "fixture-dubox-android-webview"
+		}
+		wantPage := []string{androidFixtureProfile().PageURL,
+			"https://www.terabox.com/wap/hylogin/emailVerfify",
+			"https://www.terabox.com/wap/hylogin/emailRegister?type=2&showDoublePwd=1"}[index]
+		if req.Header.Get("Referer") != wantPage {
+			t.Fatalf("Hy document URL=%q, want %q", req.Header.Get("Referer"), wantPage)
+		}
 		if len(req.URL.Query()) != len(want.Params) || len(req.PostForm) != len(want.Data) {
 			t.Fatalf("APK shape differs: query=%v form=%v", req.URL.Query(), req.PostForm)
 		}

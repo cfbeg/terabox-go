@@ -231,6 +231,7 @@ func (c *Client) PassportLogin(ctx context.Context, pre *PreLoginResponse, email
 		c.androidApp.profile.UID = uid
 		c.mu.Unlock()
 		resp.NDUS = ndus
+		c.applyAndroidAccountRegion(&resp)
 	}
 	return &resp, nil
 }
@@ -291,6 +292,7 @@ func (c *Client) RegisterSendCode(ctx context.Context, email string) (*PassportR
 		mergeCookieValues(c.cookies, pendingCookies)
 		c.registrationToken = resp.Token
 		c.mu.Unlock()
+		c.advanceAndroidRegistrationPage(true)
 	}
 	return &resp, nil
 }
@@ -332,6 +334,7 @@ func (c *Client) RegisterVerify(ctx context.Context, regToken, code string) (*Pa
 			return &resp, wrapErr(op, fmt.Errorf("verification response is missing code"))
 		}
 		c.mergeCookies(pendingCookies)
+		c.advanceAndroidRegistrationPage(false)
 	}
 	return &resp, nil
 }
@@ -432,6 +435,7 @@ func (c *Client) RegisterFinish(ctx context.Context, regToken, password string) 
 		c.mu.Unlock()
 		resp.NDUS = ndus
 		c.commitReferralRegistration(pendingCookies, ndus, true)
+		c.applyAndroidAccountRegion(&resp)
 	}
 	return &resp, nil
 }

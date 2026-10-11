@@ -1,0 +1,335 @@
+[
+  {
+    "scenario": "native_default_page_no_from",
+    "requests": [
+      {
+        "document_url": "https://terabox.com/wap/hylogin/emailRegister?type=1&devuid=fixture-cuid&clienttype=1&channel=fixture-native-channel&version=4.26.5&wapFrom=fixture-upload-log&logId=fixture-log",
+        "url": "/passport/register_v4/sendcode",
+        "method": "post",
+        "params": {
+          "language_type": "",
+          "app_id": 250528,
+          "web": 1,
+          "channel": "fixture-native-channel",
+          "clienttype": 1,
+          "jsToken": "",
+          "devuid": "fixture-cuid",
+          "version": "4.26.5",
+          "rand": 0,
+          "time": 1791792000123,
+          "lang": "en_US",
+          "cuid": "fixture-cuid",
+          "zid": ""
+        },
+        "data": {
+          "version": "4.26.5",
+          "devuid": "fixture-cuid",
+          "cuid": "fixture-cuid",
+          "lang": "en_US",
+          "client": "android",
+          "pass_version": "2.8",
+          "clientfrom": "h5",
+          "psign": "fixture-psign",
+          "pcftoken": "fixture-pcf",
+          "email": "fixture@example.invalid",
+          "op_type": 1,
+          "choose_email": 0,
+          "g_identity": ""
+        },
+        "headers": {}
+      },
+      {
+        "document_url": "https://terabox.com/wap/hylogin/emailVerfify",
+        "url": "/passport/register_v4/verify",
+        "method": "post",
+        "params": {
+          "language_type": "",
+          "app_id": 250528,
+          "web": 1,
+          "channel": "fixture-dubox-app-user-agent",
+          "clienttype": 1,
+          "jsToken": "",
+          "devuid": "fixture-cuid",
+          "version": "4.26.5",
+          "rand": 0,
+          "time": 1791792000123,
+          "lang": "en_US",
+          "cuid": "fixture-cuid",
+          "zid": ""
+        },
+        "data": {
+          "version": "4.26.5",
+          "devuid": "fixture-cuid",
+          "cuid": "fixture-cuid",
+          "lang": "en_US",
+          "client": "android",
+          "pass_version": "2.8",
+          "clientfrom": "h5",
+          "psign": "fixture-psign",
+          "pcftoken": "fixture-pcf",
+          "token": "fixture-registration-token",
+          "skip_code": 0,
+          "g_identity": "",
+          "support_unify": 1,
+          "code": "1234"
+        },
+        "headers": {}
+      },
+      {
+        "document_url": "https://terabox.com/wap/hylogin/emailRegister?type=2&showDoublePwd=1",
+        "url": "/passport/register_v4/finish",
+        "method": "post",
+        "params": {
+          "language_type": "",
+          "app_id": 250528,
+          "web": 1,
+          "channel": "fixture-dubox-app-user-agent",
+          "clienttype": 1,
+          "jsToken": "",
+          "devuid": "fixture-cuid",
+          "version": "4.26.5",
+          "rand": 0,
+          "time": 1791792000123,
+          "lang": "en_US",
+          "cuid": "fixture-cuid",
+          "zid": ""
+        },
+        "data": {
+          "version": "4.26.5",
+          "devuid": "fixture-cuid",
+          "cuid": "fixture-cuid",
+          "lang": "en_US",
+          "client": "android",
+          "pass_version": "2.8",
+          "clientfrom": "h5",
+          "psign": "fixture-psign",
+          "pcftoken": "fixture-pcf",
+          "pwd": "fixture-encrypted-password",
+          "token": "fixture-registration-token",
+          "g_identity": "",
+          "access_token": ""
+        },
+        "headers": {}
+      }
+    ],
+    "navigations": [
+      {
+        "route": {
+          "name": "HyEmailVerfify",
+          "query": {}
+        },
+        "url": "https://terabox.com/wap/hylogin/emailVerfify"
+      },
+      {
+        "route": {
+          "name": "HyEmailRegister",
+          "query": {
+            "type": "2",
+            "showDoublePwd": "1"
+          }
+        },
+        "url": "https://terabox.com/wap/hylogin/emailRegister?type=2&showDoublePwd=1"
+      }
+    ],
+    "bridgeCalls": [
+      {
+        "method": "appsflyerReport",
+        "payload": {
+          "key": "wap_email_register",
+          "isReportFb": true
+        }
+      },
+      {
+        "method": "onLoginRegister",
+        "payload": {
+          "event": 1,
+          "platform": 4,
+          "errmsg": 0
+        }
+      },
+      {
+        "method": "sendLoginResults",
+        "payload": {
+          "userid": "12345",
+          "ndus": "fixture-only-auth-token",
+          "region_domain_prefix": "jp",
+          "cur_country": "JP",
+          "reg_country": "JP",
+          "reg_time": 1791792000,
+          "displayName": "fixture-name",
+          "headUrl": "https://example.invalid/fixture-avatar",
+          "state": 1,
+          "uid": "12345"
+        }
+      }
+    ]
+  },
+  {
+    "scenario": "conditional_route_from_share",
+    "requests": [
+      {
+        "document_url": "https://terabox.com/wap/hylogin/emailRegister?type=1&devuid=fixture-cuid&clienttype=1&channel=fixture-native-channel&version=4.26.5&wapFrom=fixture-upload-log&logId=fixture-log&from=share",
+        "url": "/passport/register_v4/sendcode",
+        "method": "post",
+        "params": {
+          "language_type": "",
+          "app_id": 250528,
+          "web": 1,
+          "channel": "fixture-native-channel",
+          "clienttype": 1,
+          "jsToken": "",
+          "devuid": "fixture-cuid",
+          "version": "4.26.5",
+          "rand": 0,
+          "time": 1791792000123,
+          "lang": "en_US",
+          "cuid": "fixture-cuid",
+          "zid": ""
+        },
+        "data": {
+          "version": "4.26.5",
+          "devuid": "fixture-cuid",
+          "cuid": "fixture-cuid",
+          "lang": "en_US",
+          "client": "android",
+          "pass_version": "2.8",
+          "clientfrom": "h5",
+          "psign": "fixture-psign",
+          "pcftoken": "fixture-pcf",
+          "email": "fixture@example.invalid",
+          "op_type": 1,
+          "choose_email": 0,
+          "g_identity": "",
+          "reg_source": "share"
+        },
+        "headers": {}
+      },
+      {
+        "document_url": "https://terabox.com/wap/hylogin/emailVerfify?from=share",
+        "url": "/passport/register_v4/verify",
+        "method": "post",
+        "params": {
+          "language_type": "",
+          "app_id": 250528,
+          "web": 1,
+          "channel": "fixture-dubox-app-user-agent",
+          "clienttype": 1,
+          "jsToken": "",
+          "devuid": "fixture-cuid",
+          "version": "4.26.5",
+          "rand": 0,
+          "time": 1791792000123,
+          "lang": "en_US",
+          "cuid": "fixture-cuid",
+          "zid": ""
+        },
+        "data": {
+          "version": "4.26.5",
+          "devuid": "fixture-cuid",
+          "cuid": "fixture-cuid",
+          "lang": "en_US",
+          "client": "android",
+          "pass_version": "2.8",
+          "clientfrom": "h5",
+          "psign": "fixture-psign",
+          "pcftoken": "fixture-pcf",
+          "token": "fixture-registration-token",
+          "skip_code": 0,
+          "g_identity": "",
+          "support_unify": 1,
+          "code": "1234"
+        },
+        "headers": {}
+      },
+      {
+        "document_url": "https://terabox.com/wap/hylogin/emailRegister?type=2&showDoublePwd=1",
+        "url": "/passport/register_v4/finish",
+        "method": "post",
+        "params": {
+          "language_type": "",
+          "app_id": 250528,
+          "web": 1,
+          "channel": "fixture-dubox-app-user-agent",
+          "clienttype": 1,
+          "jsToken": "",
+          "devuid": "fixture-cuid",
+          "version": "4.26.5",
+          "rand": 0,
+          "time": 1791792000123,
+          "lang": "en_US",
+          "cuid": "fixture-cuid",
+          "zid": ""
+        },
+        "data": {
+          "version": "4.26.5",
+          "devuid": "fixture-cuid",
+          "cuid": "fixture-cuid",
+          "lang": "en_US",
+          "client": "android",
+          "pass_version": "2.8",
+          "clientfrom": "h5",
+          "psign": "fixture-psign",
+          "pcftoken": "fixture-pcf",
+          "pwd": "fixture-encrypted-password",
+          "token": "fixture-registration-token",
+          "g_identity": "",
+          "access_token": ""
+        },
+        "headers": {}
+      }
+    ],
+    "navigations": [
+      {
+        "route": {
+          "name": "HyEmailVerfify",
+          "query": {
+            "from": "share"
+          }
+        },
+        "url": "https://terabox.com/wap/hylogin/emailVerfify?from=share"
+      },
+      {
+        "route": {
+          "name": "HyEmailRegister",
+          "query": {
+            "type": "2",
+            "showDoublePwd": "1"
+          }
+        },
+        "url": "https://terabox.com/wap/hylogin/emailRegister?type=2&showDoublePwd=1"
+      }
+    ],
+    "bridgeCalls": [
+      {
+        "method": "appsflyerReport",
+        "payload": {
+          "key": "wap_email_register",
+          "isReportFb": true
+        }
+      },
+      {
+        "method": "onLoginRegister",
+        "payload": {
+          "event": 1,
+          "platform": 4,
+          "errmsg": 0
+        }
+      },
+      {
+        "method": "sendLoginResults",
+        "payload": {
+          "userid": "12345",
+          "ndus": "fixture-only-auth-token",
+          "region_domain_prefix": "jp",
+          "cur_country": "JP",
+          "reg_country": "JP",
+          "reg_time": 1791792000,
+          "displayName": "fixture-name",
+          "headUrl": "https://example.invalid/fixture-avatar",
+          "state": 1,
+          "uid": "12345"
+        }
+      }
+    ]
+  }
+]

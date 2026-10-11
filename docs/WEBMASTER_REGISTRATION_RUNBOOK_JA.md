@@ -53,6 +53,16 @@ Hy page の PCF・cookie、Android passport form、native psign、RSA password�
 native response の NDUS と UID を維持する。UID を共有主 UK や別の確認 API の UK から
 推測しない。登録後の鍵取得や転存の失敗で、成功済みアカウントを捨てない。
 
+この SDK フローは共有メタデータ・登録・native 設定取得を実装する。
+公開共有ページの `/api/srn/ck` と APK の `/api/srn/ins`・`/api/srn/ref` による
+クリック／初回導入の帰属は含まれていない。`reg_source=share` だけで管理側の
+New Users／報酬が計上されると断定しない。実際の Play referrer や clipboard の
+`upload_log` を共有主 UK から推測して追加しない。
+
+Hy の画面遷移に従って確認・完了時の active URL／Referer／channel を更新し、
+登録成功時に返る地域 prefix を後続 native API と保存 session に反映する。
+深掘りの一次解析は `C:/Projects/gemini/analysis/referral-deep-audit` に保存した。
+
 確認コードの待ち時間を一つの短いネットワーク期限へまとめない。各通信に期限を設け、
 OTP 待ちはその専用期限を使う。captcha 応答の RequestID と捕捉済み Hy page を保存し、
 同じアプリフローで確認を続ける。

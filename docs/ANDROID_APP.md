@@ -33,11 +33,20 @@ API from `login.409326c5.js`. Its `ua`/`Dr`/`Qr`/`en`/`ge` builders supply:
 | POST `/passport/register_v4/finish` | token, pwd, g_identity, access_token |
 
 Common form fields are client=android, pass_version=2.8, clientfrom=h5,
-PCF token, psign, version, device ID/CUID and language. Common query preserves
-the captured Hy channel/client type, app_id=250528, millisecond time, empty
+PCF token, psign, version, device ID/CUID and language. Common query uses
+the active page's channel or UA, native client type, app_id=250528, millisecond time, empty
 zid, page jsToken and explicit Hy rand. Only SendCode carries source=share;
 Finish does not copy it. Hy Axios explicitly sets
 `X-Requested-With: XMLHttpRequest` and URL-encoded form content type.
+
+The UI changes the active document after a successful SendCode to
+`/wap/hylogin/emailVerfify`, retaining only an existing `from` query. After
+successful Verify it opens `/wap/hylogin/emailRegister?type=2&showDoublePwd=1`,
+retaining an existing redirectUrl. The initial channel/device/logId/wapFrom
+query is not copied to these router pushes. The bridge still supplies the same
+CUID/version/language; `channel` is recomputed from each active URL or the UA.
+The SDK follows these transitions for query channel and Referer while keeping
+the same PCF/cookie state. It does not fetch another Hy page on navigation.
 
 PCF and cookies come from the captured Hy page's `templateData` or
 `__INITIAL_STATE__`. The inspected runtime had no `window.fsec`, whose
@@ -62,6 +71,13 @@ Finish's `data.ndus` and `data.userid` are passed to native `sendLoginResults`.
 The SDK stores NDUS as a cookie, checks any returned cookie for consistency,
 and stores the native UID separately. A share/account UK is never converted
 into native UID.
+
+The successful native callback also applies `region_domain_prefix` through
+`ek.____.T(null,prefix)`: `www` selects `https://terabox.com`, other region
+labels select `https://<prefix>.terabox.com`. The SDK applies validated labels
+after preserving the account, and retains the resulting API origin in the
+session. Captured Hy URLs and explicit custom fixture origins remain intact.
+Invalid optional region metadata cannot undo a confirmed account.
 
 `WebmasterRegistrationSession.AndroidApp` retains the profile, cookies,
 registration token, native identity and finish state even without a referral.

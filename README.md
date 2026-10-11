@@ -43,6 +43,10 @@ language, actual Hy page URL, and captured native common query maps. Guest
 UID/SK may be empty. To reuse an existing account, supply its privately stored
 cookie string with `WithCookies`; native UID is retained separately and is
 never inferred from the share owner's UK or an account-check UK.
+Registration follows the APK's active Hy document through its verification
+and password screens, recomputing channel/Referer while preserving bridge
+identity and PCF/cookies. Successful native account results also update the
+validated regional API origin without changing the captured Hy URL.
 
 ## Registration from a shared link
 
