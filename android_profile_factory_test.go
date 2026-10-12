@@ -22,7 +22,8 @@ func androidGuestTemplate() AndroidAppProfile {
 		NativeParams: map[string]string{"devuid": "old-device", "cuid": "old-device", "channel": "old-channel",
 			"uid": "old-uid", "userid": "old-uid", "ndus": "old-ndus", "bdstoken": "old-token", "rand": "old-signature",
 			"secret_token": "old-token", "access_token": "old-token", "phone_brand": "fixture-brand", "versioncode": "726",
-			"network_type": "WIFI", "startDevTime": "1", "firstlaunchtime": "1", "ZID": "old-token", "isVip": "1", "vip_type": "2",
+			"af_media_source": "old-install-campaign",
+			"network_type":    "WIFI", "startDevTime": "1", "firstlaunchtime": "1", "ZID": "old-token", "isVip": "1", "vip_type": "2",
 			"logid": base64.RawStdEncoding.EncodeToString([]byte("1,192.0.2.5,0"))},
 		ReportParams: map[string]string{"action": "ANDROID_ACTIVE_FRONTDESK", "start_source": "0", "push_on": "0", "backup_on ": "0",
 			"bind_uid": "old-uid", "fcm_token": "old-fcm", "source": "old-source", "msg_id": "old-message", "channel_id": "old-channel", "timestamp": "1"}}
@@ -123,6 +124,9 @@ func TestAndroidGuestProfilesSeparateConcurrentInstallations(t *testing.T) {
 			t.Fatal("Hy URL retained a different installation's ID or launch time")
 		}
 		for _, values := range []map[string]string{profile.NativeParams, profile.LegacyNativeParams} {
+			if values["af_media_source"] != "Undefined" {
+				t.Fatal("new virtual installation inherited an old installation's attribution")
+			}
 			for _, key := range []string{"ndus", "uid", "userid", "bdstoken", "rand", "secret_token", "access_token"} {
 				if _, exists := values[key]; exists {
 					t.Fatal("native parameters retained old account credentials")

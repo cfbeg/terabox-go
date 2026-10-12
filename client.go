@@ -46,6 +46,8 @@ type Client struct {
 	data                  appData
 	params                accountParams
 	registrationMu        sync.Mutex
+	attributionMu         sync.Mutex
+	androidAttribution    *AndroidAttributionState
 	referral              *WebmasterReferral
 	registrationToken     string
 	registrationNDUS      string
@@ -257,6 +259,7 @@ func apkRequestPath(path string) bool {
 	case "/passport/getpubkey", "/passport/prelogin", "/passport/login",
 		"/passport/register_v4/sendcode", "/passport/register_v4/verify", "/passport/register_v4/finish",
 		"/api/shorturlinfo", "/share/list", "/share/transfer", "/api/report/user", "/api/account/uinfo",
+		"/api/srn/ck", "/api/srn/ins", "/api/srn/ref",
 		"/rest/1.0/imact/miner/pull", "/rest/1.0/imact/miner/start", "/rest/1.0/imact/miner/getitem",
 		"/rest/1.0/imact/miner/finishgame", "/rest/1.0/inte/system/getrecord",
 		"/rest/1.0/imact/miner/queryvideo", "/rest/1.0/imact/puzzle/query",

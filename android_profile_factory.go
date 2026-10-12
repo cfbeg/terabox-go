@@ -177,6 +177,11 @@ func freshAndroidParams(template map[string]string, profile *AndroidAppProfile, 
 	for _, key := range []string{"ndus", "uid", "userid", "bdstoken", "rand", "secret_token", "access_token"} {
 		delete(values, key)
 	}
+	if _, present := values["af_media_source"]; present {
+		// A template's previous installation attribution is not provenance for
+		// a new virtual installation. Only a real first-launch result sets it.
+		values["af_media_source"] = "Undefined"
+	}
 	for key, value := range map[string]string{"devuid": profile.DeviceID, "cuid": profile.DeviceID,
 		"channel": profile.NativeChannel, "clienttype": strconv.Itoa(profile.ClientType),
 		"version": profile.Version, "lang": profile.Language, "time": strconv.FormatInt(now.UnixMilli(), 10)} {

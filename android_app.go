@@ -280,6 +280,11 @@ func (c *Client) androidAppAPIRequest(req *http.Request) (*http.Request, error) 
 		query.Del("app_name")
 	}
 	for key, value := range params {
+		if (clone.URL.Path == "/api/srn/ins" || clone.URL.Path == "/api/srn/ref") && androidAttributionEndpointField(key) {
+			// Retrofit endpoint @Query observations take precedence over cached
+			// common state. An absent nullable query must also remain absent.
+			continue
+		}
 		query.Set(key, value)
 	}
 	query.Del("rand")

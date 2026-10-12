@@ -116,15 +116,16 @@ func (c *Client) PrepareWebmasterReferralWithOptions(ctx context.Context, shareU
 // the email verification step or a transfer retry. It contains credentials;
 // passwords and verification codes are never included.
 type WebmasterRegistrationSession struct {
-	Referral              WebmasterReferral  `json:"referral"`
-	Cookies               string             `json:"cookies"`
-	WebHost               string             `json:"web_host"`
-	RegistrationToken     string             `json:"registration_token,omitempty"`
-	NDUS                  string             `json:"ndus,omitempty"`
-	PCFToken              string             `json:"pcf_token,omitempty"`
-	RegistrationConfirmed bool               `json:"registration_confirmed"`
-	FinishAttempted       bool               `json:"finish_attempted"`
-	AndroidApp            *AndroidAppProfile `json:"android_app,omitempty"`
+	Referral              WebmasterReferral        `json:"referral"`
+	Cookies               string                   `json:"cookies"`
+	WebHost               string                   `json:"web_host"`
+	RegistrationToken     string                   `json:"registration_token,omitempty"`
+	NDUS                  string                   `json:"ndus,omitempty"`
+	PCFToken              string                   `json:"pcf_token,omitempty"`
+	RegistrationConfirmed bool                     `json:"registration_confirmed"`
+	FinishAttempted       bool                     `json:"finish_attempted"`
+	AndroidApp            *AndroidAppProfile       `json:"android_app,omitempty"`
+	AndroidAttribution    *AndroidAttributionState `json:"android_attribution,omitempty"`
 }
 
 // WebmasterRegistrationSession returns a serializable app snapshot, including
@@ -147,6 +148,7 @@ func (c *Client) WebmasterRegistrationSession() *WebmasterRegistrationSession {
 	}
 	profile := copyAndroidAppProfile(c.androidApp.profile)
 	result.AndroidApp = &profile
+	result.AndroidAttribution = cloneAndroidAttribution(c.androidAttribution)
 	return result
 }
 
@@ -201,11 +203,16 @@ func (c *Client) RestoreWebmasterRegistrationSession(saved *WebmasterRegistratio
 	if saved.RegistrationConfirmed && saved.NDUS == "" {
 		return wrapErr(op, errors.New("confirmed registration is missing its session cookie"))
 	}
+	if err := validateAndroidAttributionState(saved.AndroidAttribution, restored.androidApp.profile); err != nil {
+		return wrapErr(op, err)
+	}
 	c.registrationMu.Lock()
 	defer c.registrationMu.Unlock()
+	c.attributionMu.Lock()
+	defer c.attributionMu.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.cookies["ndus"] != "" || c.referral != nil || c.registrationToken != "" || c.registrationNDUS != "" {
+	if c.cookies["ndus"] != "" || c.referral != nil || c.registrationToken != "" || c.registrationNDUS != "" || c.androidAttribution != nil {
 		return wrapErr(op, errors.New("restore requires a fresh unauthenticated client"))
 	}
 	if c.androidApp.ready || c.androidApp.profile.DeviceID != saved.AndroidApp.DeviceID ||
@@ -228,6 +235,7 @@ func (c *Client) RestoreWebmasterRegistrationSession(saved *WebmasterRegistratio
 	c.data = appData{pcfToken: saved.PCFToken}
 	c.params = accountParams{}
 	c.androidApp = restored.androidApp
+	c.androidAttribution = cloneAndroidAttribution(saved.AndroidAttribution)
 	c.androidApp.ready = saved.PCFToken != "" && c.androidApp.profile.PSign != ""
 	c.userAgent, c.lang = c.androidApp.profile.UserAgent, c.androidApp.profile.Language
 	return nil

@@ -20,6 +20,11 @@ log IDs are raw standard Base64 of
 `timeMillis,capturedNonLoopbackIP,random0..999998`.
 Hy `ck_data` and transfer `native_ck_data` belong to separate native providers.
 
+Observed shared-page click and Android installation/referrer attribution can
+be imported or explicitly reported with the [capture APIs](ANDROID_ATTRIBUTION.md).
+They retain the actual installation identity, preserve server responses in saved
+sessions, and apply only confirmed first-launch media to native requests.
+
 ## Hy registration and login
 
 `AccountWebViewActivity.getWebUrl()` (classes10.dex `0xbc1d98`) opens
