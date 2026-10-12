@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"unicode/utf8"
 )
 
 // WebmasterReferral records the shared link used to enter registration.
@@ -122,6 +123,7 @@ type WebmasterRegistrationSession struct {
 	RegistrationToken     string                   `json:"registration_token,omitempty"`
 	NDUS                  string                   `json:"ndus,omitempty"`
 	PCFToken              string                   `json:"pcf_token,omitempty"`
+	HyJSToken             string                   `json:"hy_js_token,omitempty"`
 	RegistrationConfirmed bool                     `json:"registration_confirmed"`
 	FinishAttempted       bool                     `json:"finish_attempted"`
 	AndroidApp            *AndroidAppProfile       `json:"android_app,omitempty"`
@@ -140,7 +142,7 @@ func (c *Client) WebmasterRegistrationSession() *WebmasterRegistrationSession {
 	result := &WebmasterRegistrationSession{
 		Cookies: c.cookieHeaderLocked(),
 		WebHost: c.whost, RegistrationToken: c.registrationToken,
-		PCFToken: c.data.pcfToken, RegistrationConfirmed: c.registrationConfirmed,
+		PCFToken: c.data.pcfToken, HyJSToken: c.data.jsToken, RegistrationConfirmed: c.registrationConfirmed,
 		NDUS: c.cookies["ndus"], FinishAttempted: c.registrationFinished,
 	}
 	if c.referral != nil {
@@ -162,6 +164,9 @@ func (c *Client) RestoreWebmasterRegistrationSession(saved *WebmasterRegistratio
 	}
 	if err := c.requireAndroidApp(); err != nil {
 		return wrapErr(op, err)
+	}
+	if !utf8.ValidString(saved.HyJSToken) {
+		return wrapErr(op, errors.New("saved Hy JavaScript token must be valid UTF-8"))
 	}
 	if saved.Referral.ShareURL != "" {
 		surl, err := ParseShareURL(saved.Referral.ShareURL)
@@ -232,7 +237,7 @@ func (c *Client) RestoreWebmasterRegistrationSession(saved *WebmasterRegistratio
 	c.registrationNDUS = saved.NDUS
 	c.registrationConfirmed = saved.RegistrationConfirmed
 	c.registrationFinished = saved.FinishAttempted || saved.NDUS != ""
-	c.data = appData{pcfToken: saved.PCFToken}
+	c.data = appData{pcfToken: saved.PCFToken, jsToken: saved.HyJSToken}
 	c.params = accountParams{}
 	c.androidApp = restored.androidApp
 	c.androidAttribution = cloneAndroidAttribution(saved.AndroidAttribution)

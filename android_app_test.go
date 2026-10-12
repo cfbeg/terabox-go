@@ -122,7 +122,7 @@ func TestAndroidAppRegistrationMatchesAPKReplay(t *testing.T) {
 					t.Fatal(err)
 				}
 				plain, err := rsa.DecryptPKCS1v15(rand.Reader, privateKey, ciphertext)
-				if err != nil || string(plain) != fmt.Sprintf("%x32", md5.Sum([]byte("Abcdef12345"))) {
+				if err != nil || string(plain) != fmt.Sprintf("%x32", md5.Sum([]byte("Abcdef12345!"))) {
 					t.Fatalf("APK password preprocessing differs: %v", err)
 				}
 			} else if req.PostForm.Get(key) != fmt.Sprint(value) {
@@ -155,14 +155,14 @@ func TestAndroidAppRegistrationMatchesAPKReplay(t *testing.T) {
 	if _, err := client.RegisterVerify(context.Background(), sent.Token, "1234"); err != nil {
 		t.Fatal(err)
 	}
-	finished, err := client.RegisterFinish(context.Background(), sent.Token, "Abcdef12345")
+	finished, err := client.RegisterFinish(context.Background(), sent.Token, "Abcdef12345!")
 	if err != nil || finished.NDUS != "fixture-native-session" || client.AndroidAppProfile().UID != "9007199254740993" || next != len(steps) {
 		t.Fatalf("native account was not preserved: response=%+v error=%v requests=%d", finished, err, next)
 	}
 	if ndus, _ := client.CookieValue("ndus"); ndus != finished.NDUS {
 		t.Fatal("JSON native ndus was not committed as a cookie")
 	}
-	if _, err := client.RegisterFinish(context.Background(), sent.Token, "Abcdef12345"); err == nil {
+	if _, err := client.RegisterFinish(context.Background(), sent.Token, "Abcdef12345!"); err == nil {
 		t.Fatal("registration was repeatable after success")
 	}
 }

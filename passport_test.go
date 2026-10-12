@@ -24,7 +24,7 @@ func TestPassportLoginRejectsInvalidPreLoginBeforeRequest(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		resp, err := cli.PassportLogin(context.Background(), pre, "test@example.invalid", "Abcdef123")
+		resp, err := cli.PassportLogin(context.Background(), pre, "test@example.invalid", "Abcdef123!")
 		if err == nil || resp != nil || calls != 0 {
 			t.Fatalf("response=%v error=%v requests=%d", resp, err, calls)
 		}
@@ -51,9 +51,9 @@ func TestPassportFlowsPreserveHyPublicKeyFailure(t *testing.T) {
 		var resp *PassportResponse
 		var err error
 		if login {
-			resp, err = cli.PassportLogin(context.Background(), &PreLoginResponse{}, "test@example.invalid", "Abcdef123")
+			resp, err = cli.PassportLogin(context.Background(), &PreLoginResponse{}, "test@example.invalid", "Abcdef123!")
 		} else {
-			resp, err = cli.RegisterFinish(context.Background(), "fixture-token", "Abcdef123")
+			resp, err = cli.RegisterFinish(context.Background(), "fixture-token", "Abcdef123!")
 		}
 		var apiErr *APIError
 		if resp != nil || !errors.As(err, &apiErr) || apiErr.Code != 7 || apiErr.Message != "key unavailable" || calls != 1 {
@@ -98,7 +98,7 @@ func TestPassportLoginUsesAPKNativePrandAndIdentity(t *testing.T) {
 			t.Fatal(err)
 		}
 		plain, err := rsa.DecryptPKCS1v15(rand.Reader, key, ciphertext)
-		if err != nil || string(plain) != fmt.Sprintf("%x32", md5.Sum([]byte("Abcdef123"))) {
+		if err != nil || string(plain) != fmt.Sprintf("%x32", md5.Sum([]byte("Abcdef123!"))) {
 			t.Fatalf("password transformation: %v", err)
 		}
 		want := fmt.Sprintf("%x", md5.Sum([]byte("server-seval-test@example.invalid-"+encrypted+"-123-456-fixture-cuid-android")))
@@ -108,7 +108,7 @@ func TestPassportLoginUsesAPKNativePrandAndIdentity(t *testing.T) {
 		return shareJSONResponse(req, `{"code":0,"data":{"ndus":"fixture-session","userid":"12345"}}`), nil
 	})}))
 	cli.androidApp.ready, cli.data.pcfToken, cli.data.pubKey = true, "fixture-pcf", string(public)
-	resp, err := cli.PassportLogin(context.Background(), pre, "test@example.invalid", "Abcdef123")
+	resp, err := cli.PassportLogin(context.Background(), pre, "test@example.invalid", "Abcdef123!")
 	if err != nil || resp.NDUS != "fixture-session" || cli.AndroidAppProfile().UID != "12345" || calls != 1 {
 		t.Fatalf("native login result=%+v error=%v", resp, err)
 	}

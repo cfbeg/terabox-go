@@ -116,7 +116,7 @@ func TestReferralFinishUnknownPreservesSessionAndBlocksRepeat(t *testing.T) {
 			response.Header.Add("Set-Cookie", "ndus=fixture-uncertain-session; Path=/")
 			return response, nil
 		}))
-		result, err := client.RegisterFinishWithReferral(context.Background(), "fixture-token", "Abcdef123", &WebmasterTransferOptions{FSIDs: []int64{789}, Destination: "/"})
+		result, err := client.RegisterFinishWithReferral(context.Background(), "fixture-token", "Abcdef123!", &WebmasterTransferOptions{FSIDs: []int64{789}, Destination: "/"})
 		if err == nil || result == nil || result.Session == nil || !result.Session.FinishAttempted || result.Session.RegistrationConfirmed || result.Session.NDUS != "fixture-uncertain-session" || calls != 1 {
 			t.Fatalf("unknown finish state lost: result=%+v error=%v", result, err)
 		}
@@ -127,7 +127,7 @@ func TestReferralFinishUnknownPreservesSessionAndBlocksRepeat(t *testing.T) {
 		if _, err := fresh.RegisterSendCode(context.Background(), "fixture@example.invalid"); err == nil {
 			t.Fatal("unknown finish permitted new registration")
 		}
-		if _, err := client.RegisterFinish(context.Background(), "fixture-token", "Abcdef123"); err == nil || calls != 1 {
+		if _, err := client.RegisterFinish(context.Background(), "fixture-token", "Abcdef123!"); err == nil || calls != 1 {
 			t.Fatal("unknown finish was sent twice")
 		}
 	}
@@ -152,7 +152,7 @@ func TestReferralTransferFailureKeepsConfirmedAccount(t *testing.T) {
 		}
 	}))
 	opts := &WebmasterTransferOptions{FSIDs: []int64{789}, Destination: "/"}
-	result, err := client.RegisterFinishWithReferral(context.Background(), "fixture-token", "Abcdef123", opts)
+	result, err := client.RegisterFinishWithReferral(context.Background(), "fixture-token", "Abcdef123!", opts)
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) || apiErr.Code != 12 || result.Registration.NDUS != "fixture-session" || !result.Session.RegistrationConfirmed || result.Session.AndroidApp.UID != "12345" {
 		t.Fatal("transfer error discarded native registration")
@@ -161,7 +161,7 @@ func TestReferralTransferFailureKeepsConfirmedAccount(t *testing.T) {
 	if err != nil || transfer.TaskID != 987 || finishes != 1 || transfers != 2 {
 		t.Fatal("transfer retry repeated registration")
 	}
-	if _, err := client.RegisterFinish(context.Background(), "fixture-token", "Abcdef123"); err == nil || finishes != 1 {
+	if _, err := client.RegisterFinish(context.Background(), "fixture-token", "Abcdef123!"); err == nil || finishes != 1 {
 		t.Fatal("confirmed finish was repeatable")
 	}
 }
@@ -175,7 +175,7 @@ func TestReferralRegistrationRejectsDifferentTokenWithoutHTTP(t *testing.T) {
 		if _, err := client.RegisterVerify(context.Background(), token, "1234"); err == nil {
 			t.Fatal("mismatched verify token accepted")
 		}
-		if _, err := client.RegisterFinish(context.Background(), token, "Abcdef123"); err == nil {
+		if _, err := client.RegisterFinish(context.Background(), token, "Abcdef123!"); err == nil {
 			t.Fatal("mismatched finish token accepted")
 		}
 	}

@@ -42,7 +42,7 @@ func TestAndroidFinishAppliesRegionOnlyAfterPreservingAccount(t *testing.T) {
 			client.androidApp.ready = true
 			client.data.pcfToken = "fixture-pcf"
 			client.registrationToken = "fixture-token"
-			response, err := client.RegisterFinish(context.Background(), "fixture-token", "Abcdef12345")
+			response, err := client.RegisterFinish(context.Background(), "fixture-token", "Abcdef12345!")
 			if err != nil || response.NDUS != "confirmed-fixture-session" || client.AndroidAppProfile().UID != "77" {
 				t.Fatal("valid registration was lost due to optional routing metadata")
 			}

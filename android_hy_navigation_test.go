@@ -121,7 +121,7 @@ func TestAndroidHyRegistrationFollowsAPKUIReplayAndRestoresVerification(t *testi
 							t.Fatal(err)
 						}
 						plain, err := rsa.DecryptPKCS1v15(rand.Reader, privateKey, ciphertext)
-						if err != nil || string(plain) != fmt.Sprintf("%x32", md5.Sum([]byte("Abcdef12345"))) {
+						if err != nil || string(plain) != fmt.Sprintf("%x32", md5.Sum([]byte("Abcdef12345!"))) {
 							t.Fatalf("APK password preprocessing differs: %v", err)
 						}
 					} else if req.PostForm.Get(name) != fmt.Sprint(value) {
@@ -186,7 +186,7 @@ func TestAndroidHyRegistrationFollowsAPKUIReplayAndRestoresVerification(t *testi
 				t.Fatal(err)
 			}
 			assertPage(client, fixture.Navigations[1].URL)
-			finished, err := client.RegisterFinish(context.Background(), saved.RegistrationToken, "Abcdef12345")
+			finished, err := client.RegisterFinish(context.Background(), saved.RegistrationToken, "Abcdef12345!")
 			if err != nil || finished == nil || finished.NDUS != "fixture-only-auth-token" || client.AndroidAppProfile().UID != "12345" || next != len(steps) || bootstraps != 1 {
 				t.Fatalf("restored APK flow failed: response=%+v error=%v requests=%d bootstraps=%d", finished, err, next, bootstraps)
 			}

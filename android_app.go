@@ -434,49 +434,14 @@ func (c *Client) resolveAndroidPSign(ctx context.Context) error {
 	return nil
 }
 
-var androidObjectAssignment = regexp.MustCompile(`(?:var\s+|let\s+|const\s+|window\.)?(templateData|__INITIAL_STATE__)\s*=\s*`)
 var androidFSEC = regexp.MustCompile(`(?i)(?:window\s*\.\s*fsec\s*=|(?:var|let|const)\s+fsec\s*=|<script[^>]+src\s*=[^>]*fsec)`)
-
-func androidPageObjects(page string) []string {
-	var objects []string
-	for _, match := range androidObjectAssignment.FindAllStringIndex(page, -1) {
-		start := match[1]
-		if start >= len(page) || page[start] != '{' {
-			continue
-		}
-		depth, quoted, escaped := 0, false, false
-		for i := start; i < len(page); i++ {
-			ch := page[i]
-			if quoted {
-				if escaped {
-					escaped = false
-				} else if ch == '\\' {
-					escaped = true
-				} else if ch == '"' {
-					quoted = false
-				}
-				continue
-			}
-			if ch == '"' {
-				quoted = true
-			} else if ch == '{' {
-				depth++
-			} else if ch == '}' {
-				depth--
-				if depth == 0 {
-					objects = append(objects, page[start:i+1])
-					break
-				}
-			}
-		}
-	}
-	return objects
-}
 
 func (c *Client) loadAndroidHyPage(ctx context.Context) error {
 	profile := c.AndroidAppProfile()
 	target, _ := url.Parse(profile.PageURL)
-	_, cookies := c.snapshot()
+	c.mu.RLock()
+	requestCookies := copyAndroidStringMap(c.cookies)
+	c.mu.RUnlock()
 	var pending []*http.Cookie
 	for hops := 0; ; hops++ {
 		if target.Path != "/wap/hylogin" && !strings.HasPrefix(target.Path, "/wap/hylogin/") {
@@ -487,7 +452,7 @@ func (c *Client) loadAndroidHyPage(ctx context.Context) error {
 			return err
 		}
 		req.Header.Set("User-Agent", profile.UserAgent)
-		if cookies != "" {
+		if cookies := serializeCookies(requestCookies); cookies != "" {
 			req.Header.Set("Cookie", cookies)
 		}
 		response, err := c.doHTTP(req, c.timeout)
@@ -504,19 +469,12 @@ func (c *Client) loadAndroidHyPage(ctx context.Context) error {
 				err = c.validateEndpoint(next)
 			}
 			pending = append(pending, response.Cookies()...)
+			mergeCookieValues(requestCookies, response.Cookies())
 			response.Body.Close()
 			if err != nil {
 				return err
 			}
 			target = next
-			values := make(map[string]string)
-			for _, cookie := range pending {
-				values[cookie.Name] = cookie.Value
-			}
-			cookies = c.CookieString()
-			if extra := serializeCookies(values); extra != "" {
-				cookies += "; " + extra
-			}
 			continue
 		}
 		if response.StatusCode != http.StatusOK {
@@ -531,19 +489,9 @@ func (c *Client) loadAndroidHyPage(ctx context.Context) error {
 		if androidFSEC.Match(page) {
 			return errors.New("Android Hy page requires fsec email encryption; capture its encryptor before sending email")
 		}
-		var data TemplateData
-		for _, raw := range androidPageObjects(string(page)) {
-			var entry TemplateData
-			if err := json.Unmarshal([]byte(raw), &entry); err != nil {
-				return fmt.Errorf("invalid Android Hy page data: %w", err)
-			}
-			if entry.PcfToken != "" {
-				data = entry
-				break
-			}
-		}
-		if data.PcfToken == "" {
-			return errors.New("Android Hy page did not provide pcftoken")
+		data, err := androidHyBootstrap(string(page))
+		if err != nil {
+			return err
 		}
 		pending = append(pending, response.Cookies()...)
 		c.mu.Lock()
@@ -584,17 +532,18 @@ func androidPasswordValid(password string) bool {
 	if len(password) < 8 || len(password) > 20 {
 		return false
 	}
-	var kinds [4]bool
+	var kinds [3]bool
 	for _, ch := range password {
+		if ch < '!' || ch > '~' {
+			return false
+		}
 		switch {
-		case ch >= 'a' && ch <= 'z':
+		case (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z'):
 			kinds[0] = true
-		case ch >= 'A' && ch <= 'Z':
-			kinds[1] = true
 		case ch >= '0' && ch <= '9':
-			kinds[2] = true
+			kinds[1] = true
 		default:
-			kinds[3] = true
+			kinds[2] = true
 		}
 	}
 	count := 0

@@ -53,8 +53,19 @@ CUID/version/language; `channel` is recomputed from each active URL or the UA.
 The SDK follows these transitions for query channel and Referer while keeping
 the same PCF/cookie state. It does not fetch another Hy page on navigation.
 
-PCF and cookies come from the captured Hy page's `templateData` or
-`__INITIAL_STATE__`. The inspected runtime had no `window.fsec`, whose
+PCF follows the APK's `wa()` selection: nonempty `__INITIAL_STATE__.pcftoken`
+precedes `templateData.pcftoken`, regardless of their assignment order. Hy
+`jsToken` follows `Dr()` and comes from the actual `window.jsToken` global,
+including an observed top-level `var jsToken` literal; a similarly named field
+inside either state object is not its source. Captured single/double-quoted
+literals and standard JS escapes are decoded without executing page JavaScript.
+Dynamic global-token expressions require a separate runtime capture and are
+rejected explicitly. Redirect cookies replace/delete previous names in a
+request-local copy; cookies and bootstrap state are committed together after a
+valid final page. The saved `hy_js_token` retains the actual global token;
+older sessions without that field keep the empty default.
+
+The inspected runtime had no `window.fsec`, whose
 plaintext email branch is explicitly supported in the APK. An initializing
 fsec page is rejected until its runtime encryptor has been captured.
 
@@ -62,8 +73,11 @@ Native psign retrieval uses POST `/passport/getpubkey`, passport version 2.0.
 It computes `MD5hex(MD5hex(CUID+"android"+pp3)+pp3)`; missing/failed pp3 uses
 the APK fallback `dubox`. Hy RSA public-key retrieval is POST with version
 2.8. Password encryption is RSA PKCS#1 v1.5 of `MD5hex(password)+"32"`, using
-the AES-decoded pp1/pp2 public key. The app policy is 8–20 characters and three
-character kinds; the verification screen uses four digits.
+the AES-decoded pp1/pp2 public key. The actual UI policy requires 8–20 printable
+ASCII characters (`!` through `~`) including all three kinds: letters, digits,
+and symbols. Uppercase/lowercase letters belong to one kind. Spaces, controls,
+and non-ASCII characters fail the UI policy. The verification screen uses four
+digits.
 
 Hy password login uses the native `loginInfoEncrypt` bridge. Dispatcher
 `Lww/b0.______` calls `e0` at `0xc0c918`; `e0` (`0xc0b3e8`) returns MD5 hex of
@@ -107,6 +121,18 @@ Retrofit sharing uses its own common fields and form conventions. Native
 transfer query is shareid/from/bot_uk; its form is path/async/fsidlist/ondup
 plus native CK fields. Task acceptance remains distinct from saved-file
 completion and Webmaster acquisition accounting.
+
+The implemented transfer contract is the APK's Retrofit MultiShareList branch.
+The ordinary `share_detail` fragment also has a separate legacy-network Save
+branch with string-valued file IDs and a different common transport. Its
+guarded share-view handler reports received-link history through
+`POST /rest/receive/report`. Those additional UI branches are not implemented
+by the current metadata/registration/Retrofit-transfer workflow. Their effect
+on Webmaster acquisition credit has not been demonstrated.
+
+Native install-media storage and the process-cached common media value are
+also distinct. The SDK currently applies a confirmed first-launch media result
+immediately; exact APK cache timing needs an actual runtime observation.
 
 ## Three APK rand families
 

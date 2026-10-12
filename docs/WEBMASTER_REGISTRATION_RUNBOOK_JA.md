@@ -54,10 +54,13 @@ native response の NDUS と UID を維持する。UID を共有主 UK や別の
 推測しない。登録後の鍵取得や転存の失敗で、成功済みアカウントを捨てない。
 
 この SDK フローは共有メタデータ・登録・native 設定取得を実装する。
-公開共有ページの `/api/srn/ck` と APK の `/api/srn/ins`・`/api/srn/ref` による
-クリック／初回導入の帰属は含まれていない。`reg_source=share` だけで管理側の
-New Users／報酬が計上されると断定しない。実際の Play referrer や clipboard の
-`upload_log` を共有主 UK から推測して追加しない。
+実測した入力を指定する場合は、公開共有ページの `/api/srn/ck` と APK の
+`/api/srn/ins`・`/api/srn/ref` による帰属の
+[取り込み・明示的な報告](ANDROID_ATTRIBUTION.md) にも対応する。
+登録 API から自動で導入情報を生成・報告する処理ではない。
+取得済みの成功応答は再利用し、結果不明の報告は自動再送しない。
+`reg_source=share` だけで New Users／報酬が計上されると断定しない。
+実際の Play referrer や clipboard の `upload_log` を共有主 UK から推測して追加しない。
 
 Hy の画面遷移に従って確認・完了時の active URL／Referer／channel を更新し、
 登録成功時に返る地域 prefix を後続 native API と保存 session に反映する。
@@ -65,7 +68,9 @@ Hy の画面遷移に従って確認・完了時の active URL／Referer／chann
 
 確認コードの待ち時間を一つの短いネットワーク期限へまとめない。各通信に期限を設け、
 OTP 待ちはその専用期限を使う。captcha 応答の RequestID と捕捉済み Hy page を保存し、
-同じアプリフローで確認を続ける。
+同じアプリフローで確認を続ける。SDK の challenge error は RequestID を持つが、
+creator の送信・確認失敗の checkpoint はその応答全体を保存する実装にはなっていない。
+画面 URL だけで元の拒否されたリクエストの復旧を判断しない。
 
 ## 保存・復旧
 
@@ -86,9 +91,10 @@ Finish 状態を含む。捕捉した同じ identity の fresh な `NewAndroidAp
 
 ## A 側の計上確認
 
-公式の [更新時間説明](https://www.terabox.app/wap/help-center-questions-answer?id=160)
-は前日 GMT+8 の 24:00 までを集計し、13:00～17:00 GMT+8 に報酬データを更新する。
-日本時間では 14:00～18:00。登録日時を GMT+8 に換算して集計日を選ぶ。
+集計日・更新時間・使用するタイムゾーンは、当日の管理画面と
+[公式ヘルプ](https://www.terabox.app/wap/help-center-questions-answer?id=160) の説明で確認する。
+2026-10-12 の本文取得では更新時刻を再確認できなかったため、固定の更新時刻を前提に
+計上の成否を判断しない。登録日時と管理画面のタイムゾーンをそろえて集計日を選ぶ。
 
 1. 該当する集計更新後に A の同じ共有リンク・プラン・集計日の New Users 値 N1 を記録する。
 2. 比較する N0 と N1 は累計同士か同じ集計日の数値同士とする。
