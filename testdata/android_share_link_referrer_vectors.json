@@ -1,0 +1,104 @@
+{
+  "schema": 1,
+  "source_asset": "share_asset_main.2986c26e.js",
+  "source_sha256": "d5940789b440515e21452c0ebf1bbca5a05dc35a9cb30e7c0a7dd951aee1cfea",
+  "module": "1f03",
+  "share_entry_type": 1,
+  "all_inputs_are_synthetic": true,
+  "google_play_contacted": false,
+  "actual_play_relation_source": "saved real getter == native @Query decoded once; raw getter is one whole URI component encoding",
+  "nil_agency_semantics": "Go nil modeled as JS undefined, not explicit JS null",
+  "deps": "Clipboard and e259 deep-link callback stubbed; original S/p/b source is executed unchanged",
+  "vectors": [
+    {
+      "name": "standard",
+      "input": {
+        "page_url": "https://www.terabox.com/wap/share/filelist?surl=fixture-key",
+        "deep_link": "dubox://share_detail?shareid=42&uk=7&share_create_time=1700000000&randsk=fixture%2Btoken%3D&share_expired_time=0&source=af_link&share_file_count=1&surl=fixture-key",
+        "tera_link_type": 1,
+        "agency": "h0__0_G2"
+      },
+      "now_ms": 1700000000123,
+      "nonce": 12340000,
+      "expected_referrer": "utm_source%3Dtera_sharelink%26utm_campaign%3Dheader_button%26surl%3Dfixture-key%26tera_link_id%3D1700000000123-12340000%26tera_link_type%3D1%26c%3Dhttps%253A%252F%252Fwww.terabox.com%252Fwap%252Fshare%252Ffilelist%253Fsurl%253Dfixture-key%26af_dp%3Ddubox%253A%252F%252Fshare_detail%253Fshareid%253D42%2526uk%253D7%2526share_create_time%253D1700000000%2526randsk%253Dfixture%25252Btoken%25253D%2526share_expired_time%253D0%2526source%253Daf_link%2526share_file_count%253D1%2526surl%253Dfixture-key%26agency%3Dh0__0_G2",
+      "expected_link_id": "1700000000123-12340000",
+      "expected_store_url": "https://play.google.com/store/apps/details?id=com.dubox.drive&referrer=utm_source%253Dtera_sharelink%2526utm_campaign%253Dheader_button%2526surl%253Dfixture-key%2526tera_link_id%253D1700000000123-12340000%2526tera_link_type%253D1%2526c%253Dhttps%25253A%25252F%25252Fwww.terabox.com%25252Fwap%25252Fshare%25252Ffilelist%25253Fsurl%25253Dfixture-key%2526af_dp%253Ddubox%25253A%25252F%25252Fshare_detail%25253Fshareid%25253D42%252526uk%25253D7%252526share_create_time%25253D1700000000%252526randsk%25253Dfixture%2525252Btoken%2525253D%252526share_expired_time%25253D0%252526source%25253Daf_link%252526share_file_count%25253D1%252526surl%25253Dfixture-key%2526agency%253Dh0__0_G2",
+      "oracle_source": "original webpack 1f03 export d; browser Store query decoded once"
+    },
+    {
+      "name": "nil_agency_is_js_undefined",
+      "input": {
+        "page_url": "https://www.terabox.com/wap/share/filelist?surl=fixture-key",
+        "deep_link": "dubox://share_detail?shareid=42&uk=7&share_create_time=1700000000&randsk=fixture%2Btoken%3D&share_expired_time=0&source=af_link&share_file_count=1&surl=fixture-key",
+        "tera_link_type": 1
+      },
+      "now_ms": 1700000000123,
+      "nonce": 1,
+      "expected_referrer": "utm_source%3Dtera_sharelink%26utm_campaign%3Dheader_button%26surl%3Dfixture-key%26tera_link_id%3D1700000000123-00000001%26tera_link_type%3D1%26c%3Dhttps%253A%252F%252Fwww.terabox.com%252Fwap%252Fshare%252Ffilelist%253Fsurl%253Dfixture-key%26af_dp%3Ddubox%253A%252F%252Fshare_detail%253Fshareid%253D42%2526uk%253D7%2526share_create_time%253D1700000000%2526randsk%253Dfixture%25252Btoken%25253D%2526share_expired_time%253D0%2526source%253Daf_link%2526share_file_count%253D1%2526surl%253Dfixture-key%26agency%3Dundefined",
+      "expected_link_id": "1700000000123-00000001",
+      "expected_store_url": "https://play.google.com/store/apps/details?id=com.dubox.drive&referrer=utm_source%253Dtera_sharelink%2526utm_campaign%253Dheader_button%2526surl%253Dfixture-key%2526tera_link_id%253D1700000000123-00000001%2526tera_link_type%253D1%2526c%253Dhttps%25253A%25252F%25252Fwww.terabox.com%25252Fwap%25252Fshare%25252Ffilelist%25253Fsurl%25253Dfixture-key%2526af_dp%253Ddubox%25253A%25252F%25252Fshare_detail%25253Fshareid%25253D42%252526uk%25253D7%252526share_create_time%25253D1700000000%252526randsk%25253Dfixture%2525252Btoken%2525253D%252526share_expired_time%25253D0%252526source%25253Daf_link%252526share_file_count%25253D1%252526surl%25253Dfixture-key%2526agency%253Dundefined",
+      "oracle_source": "original webpack 1f03 export d; browser Store query decoded once"
+    },
+    {
+      "name": "empty_agency",
+      "input": {
+        "page_url": "https://www.terabox.com/wap/share/filelist?surl=fixture-key",
+        "deep_link": "dubox://share_detail?shareid=42&uk=7&share_create_time=1700000000&randsk=fixture%2Btoken%3D&share_expired_time=0&source=af_link&share_file_count=1&surl=fixture-key",
+        "tera_link_type": 1,
+        "agency": ""
+      },
+      "now_ms": 1700000000123,
+      "nonce": 0,
+      "expected_referrer": "utm_source%3Dtera_sharelink%26utm_campaign%3Dheader_button%26surl%3Dfixture-key%26tera_link_id%3D1700000000123-00000000%26tera_link_type%3D1%26c%3Dhttps%253A%252F%252Fwww.terabox.com%252Fwap%252Fshare%252Ffilelist%253Fsurl%253Dfixture-key%26af_dp%3Ddubox%253A%252F%252Fshare_detail%253Fshareid%253D42%2526uk%253D7%2526share_create_time%253D1700000000%2526randsk%253Dfixture%25252Btoken%25253D%2526share_expired_time%253D0%2526source%253Daf_link%2526share_file_count%253D1%2526surl%253Dfixture-key%26agency%3D",
+      "expected_link_id": "1700000000123-00000000",
+      "expected_store_url": "https://play.google.com/store/apps/details?id=com.dubox.drive&referrer=utm_source%253Dtera_sharelink%2526utm_campaign%253Dheader_button%2526surl%253Dfixture-key%2526tera_link_id%253D1700000000123-00000000%2526tera_link_type%253D1%2526c%253Dhttps%25253A%25252F%25252Fwww.terabox.com%25252Fwap%25252Fshare%25252Ffilelist%25253Fsurl%25253Dfixture-key%2526af_dp%253Ddubox%25253A%25252F%25252Fshare_detail%25253Fshareid%25253D42%252526uk%25253D7%252526share_create_time%25253D1700000000%252526randsk%25253Dfixture%2525252Btoken%2525253D%252526share_expired_time%25253D0%252526source%25253Daf_link%252526share_file_count%25253D1%252526surl%25253Dfixture-key%2526agency%253D",
+      "oracle_source": "original webpack 1f03 export d; browser Store query decoded once"
+    },
+    {
+      "name": "agency_component_punctuation_unicode",
+      "input": {
+        "page_url": "https://www.terabox.com/wap/share/filelist?surl=fixture-key",
+        "deep_link": "dubox://share_detail?shareid=42&uk=7&share_create_time=1700000000&randsk=fixture%2Btoken%3D&share_expired_time=0&source=af_link&share_file_count=1&surl=fixture-key",
+        "tera_link_type": 1,
+        "agency": "!'()*+ space % 雪"
+      },
+      "now_ms": 1700000000123,
+      "nonce": 99999999,
+      "expected_referrer": "utm_source%3Dtera_sharelink%26utm_campaign%3Dheader_button%26surl%3Dfixture-key%26tera_link_id%3D1700000000123-99999999%26tera_link_type%3D1%26c%3Dhttps%253A%252F%252Fwww.terabox.com%252Fwap%252Fshare%252Ffilelist%253Fsurl%253Dfixture-key%26af_dp%3Ddubox%253A%252F%252Fshare_detail%253Fshareid%253D42%2526uk%253D7%2526share_create_time%253D1700000000%2526randsk%253Dfixture%25252Btoken%25253D%2526share_expired_time%253D0%2526source%253Daf_link%2526share_file_count%253D1%2526surl%253Dfixture-key%26agency%3D!'()*%2B%20space%20%25%20%E9%9B%AA",
+      "expected_link_id": "1700000000123-99999999",
+      "expected_store_url": "https://play.google.com/store/apps/details?id=com.dubox.drive&referrer=utm_source%253Dtera_sharelink%2526utm_campaign%253Dheader_button%2526surl%253Dfixture-key%2526tera_link_id%253D1700000000123-99999999%2526tera_link_type%253D1%2526c%253Dhttps%25253A%25252F%25252Fwww.terabox.com%25252Fwap%25252Fshare%25252Ffilelist%25253Fsurl%25253Dfixture-key%2526af_dp%253Ddubox%25253A%25252F%25252Fshare_detail%25253Fshareid%25253D42%252526uk%25253D7%252526share_create_time%25253D1700000000%252526randsk%25253Dfixture%2525252Btoken%2525253D%252526share_expired_time%25253D0%252526source%25253Daf_link%252526share_file_count%25253D1%252526surl%25253Dfixture-key%2526agency%253D!'()*%252B%2520space%2520%2525%2520%25E9%259B%25AA",
+      "oracle_source": "original webpack 1f03 export d; browser Store query decoded once"
+    },
+    {
+      "name": "page_query_raw_suffix_and_op_source",
+      "input": {
+        "page_url": "https://www.terabox.com/wap/share/filelist?surl=fixture-key&note=!%27()*+%20%25%E9%9B%AA&op_source=origin%2Bvalue",
+        "deep_link": "dubox://share_detail?shareid=42&uk=7&share_create_time=1700000000&randsk=fixture%2Btoken%3D&share_expired_time=0&source=af_link&share_file_count=1&surl=fixture-key&note=!'()*%2B%20%25%E9%9B%AA&op_source=origin%2Bvalue",
+        "tera_link_type": 1,
+        "agency": "h0__0_G2",
+        "op_source": "origin+value"
+      },
+      "now_ms": 1700000000456,
+      "nonce": 42000000,
+      "expected_referrer": "utm_source%3Dtera_sharelink%26utm_campaign%3Dheader_button%26surl%3Dfixture-key%26note%3D!%2527()*%2B%2520%2525%25E9%259B%25AA%26op_source%3Dorigin%252Bvalue%26tera_link_id%3D1700000000456-42000000%26tera_link_type%3D1%26c%3Dhttps%253A%252F%252Fwww.terabox.com%252Fwap%252Fshare%252Ffilelist%253Fsurl%253Dfixture-key%2526note%253D!%252527()*%252B%252520%252525%2525E9%25259B%2525AA%2526op_source%253Dorigin%25252Bvalue%26af_dp%3Ddubox%253A%252F%252Fshare_detail%253Fshareid%253D42%2526uk%253D7%2526share_create_time%253D1700000000%2526randsk%253Dfixture%25252Btoken%25253D%2526share_expired_time%253D0%2526source%253Daf_link%2526share_file_count%253D1%2526surl%253Dfixture-key%2526note%253D!'()*%25252B%252520%252525%2525E9%25259B%2525AA%2526op_source%253Dorigin%25252Bvalue%26agency%3Dh0__0_G2",
+      "expected_link_id": "1700000000456-42000000",
+      "expected_store_url": "https://play.google.com/store/apps/details?id=com.dubox.drive&referrer=utm_source%253Dtera_sharelink%2526utm_campaign%253Dheader_button%2526surl%253Dfixture-key%2526note%253D!%252527()*%252B%252520%252525%2525E9%25259B%2525AA%2526op_source%253Dorigin%25252Bvalue%2526tera_link_id%253D1700000000456-42000000%2526tera_link_type%253D1%2526c%253Dhttps%25253A%25252F%25252Fwww.terabox.com%25252Fwap%25252Fshare%25252Ffilelist%25253Fsurl%25253Dfixture-key%252526note%25253D!%25252527()*%25252B%25252520%25252525%252525E9%2525259B%252525AA%252526op_source%25253Dorigin%2525252Bvalue%2526af_dp%253Ddubox%25253A%25252F%25252Fshare_detail%25253Fshareid%25253D42%252526uk%25253D7%252526share_create_time%25253D1700000000%252526randsk%25253Dfixture%2525252Btoken%2525253D%252526share_expired_time%25253D0%252526source%25253Daf_link%252526share_file_count%25253D1%252526surl%25253Dfixture-key%252526note%25253D!'()*%2525252B%25252520%25252525%252525E9%2525259B%252525AA%252526op_source%25253Dorigin%2525252Bvalue%2526agency%253Dh0__0_G2",
+      "oracle_source": "original webpack 1f03 export d; browser Store query decoded once"
+    },
+    {
+      "name": "location_fragment_preserved_in_c_only",
+      "input": {
+        "page_url": "https://www.terabox.com/wap/share/filelist?surl=fixture-key#synthetic-fragment",
+        "deep_link": "dubox://share_detail?shareid=42&uk=7&share_create_time=1700000000&randsk=fixture%2Btoken%3D&share_expired_time=0&source=af_link&share_file_count=1&surl=fixture-key",
+        "tera_link_type": 1,
+        "agency": "h0__0_G2"
+      },
+      "now_ms": 1700000000789,
+      "nonce": 50000000,
+      "expected_referrer": "utm_source%3Dtera_sharelink%26utm_campaign%3Dheader_button%26surl%3Dfixture-key%26tera_link_id%3D1700000000789-50000000%26tera_link_type%3D1%26c%3Dhttps%253A%252F%252Fwww.terabox.com%252Fwap%252Fshare%252Ffilelist%253Fsurl%253Dfixture-key%2523synthetic-fragment%26af_dp%3Ddubox%253A%252F%252Fshare_detail%253Fshareid%253D42%2526uk%253D7%2526share_create_time%253D1700000000%2526randsk%253Dfixture%25252Btoken%25253D%2526share_expired_time%253D0%2526source%253Daf_link%2526share_file_count%253D1%2526surl%253Dfixture-key%26agency%3Dh0__0_G2",
+      "expected_link_id": "1700000000789-50000000",
+      "expected_store_url": "https://play.google.com/store/apps/details?id=com.dubox.drive&referrer=utm_source%253Dtera_sharelink%2526utm_campaign%253Dheader_button%2526surl%253Dfixture-key%2526tera_link_id%253D1700000000789-50000000%2526tera_link_type%253D1%2526c%253Dhttps%25253A%25252F%25252Fwww.terabox.com%25252Fwap%25252Fshare%25252Ffilelist%25253Fsurl%25253Dfixture-key%252523synthetic-fragment%2526af_dp%253Ddubox%25253A%25252F%25252Fshare_detail%25253Fshareid%25253D42%252526uk%25253D7%252526share_create_time%25253D1700000000%252526randsk%25253Dfixture%2525252Btoken%2525253D%252526share_expired_time%25253D0%252526source%25253Daf_link%252526share_file_count%25253D1%252526surl%25253Dfixture-key%2526agency%253Dh0__0_G2",
+      "oracle_source": "original webpack 1f03 export d; browser Store query decoded once"
+    }
+  ]
+}

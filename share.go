@@ -15,14 +15,18 @@ import (
 // ShareID normalizes the shareid and share_id fields. UK accepts the numeric
 // uk or uk_str field; UKString preserves uk_str when it is supplied.
 type ShareInfoResponse struct {
-	Errno     int             `json:"errno"`
-	ErrMsg    string          `json:"errmsg,omitempty"`
-	RequestID json.Number     `json:"request_id,omitempty"`
-	ShareID   Int64ish        `json:"shareid"`
-	UK        Int64ish        `json:"uk"`
-	UKString  string          `json:"uk_str,omitempty"`
-	List      []FileEntry     `json:"list"`
-	Raw       json.RawMessage `json:"raw,omitempty"`
+	Errno       int             `json:"errno"`
+	ErrMsg      string          `json:"errmsg,omitempty"`
+	RequestID   json.Number     `json:"request_id,omitempty"`
+	ShareID     Int64ish        `json:"shareid"`
+	UK          Int64ish        `json:"uk"`
+	UKString    string          `json:"uk_str,omitempty"`
+	CTime       *Int64ish       `json:"ctime,omitempty"`
+	ExpiredType *Int64ish       `json:"expiredtype,omitempty"`
+	Randsk      string          `json:"randsk,omitempty"`
+	FCount      *Int64ish       `json:"fcount,omitempty"`
+	List        []FileEntry     `json:"list"`
+	Raw         json.RawMessage `json:"raw,omitempty"`
 }
 
 // UnmarshalJSON accepts both metadata endpoints' identifier fields and

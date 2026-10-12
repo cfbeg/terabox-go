@@ -1,31 +1,37 @@
-# Captured Android installation attribution
+# Android installation attribution
 
 The APK 4.26.5 has separate shared-page click, installation, and Play referrer
-operations. The SDK accepts their observed provenance explicitly and saves it
+operations. The SDK distinguishes observed Play inputs from explicitly
+generated shared-link inputs and saves their provenance
 in `WebmasterRegistrationSession.AndroidAttribution`. A completed report is
 installation attribution evidence; it does not confirm Webmaster counts or
 rewards.
 
 `NewAndroidGuestProfile` generates a virtual device identity. It does not create
 an actual Play installation or its referrer. Its native `af_media_source` cache
-starts as `Undefined` when that field exists in the template. Capture records
+starts as `Undefined` when that field exists in the template. Observed records
 must retain the actual installation's profile/CUID and cannot be attached to a
 new random profile.
 
 ## Inputs and requests
 
-`AndroidAttributionCapture` contains `device_id`, optional `click`, optional
+`AndroidAttributionCapture` contains `device_id`, optional `provenance`, optional `click`, optional
 `install`, optional `install_referrer`, and optional observed native cache/scene
 fields. `SetAndroidAttributionCapture`
-validates and copies those inputs without network activity. No share owner,
-share ID, or shared URL is converted into an install referrer, invite code, or
-ReportUser `bind_uid`.
+validates and copies those inputs without network activity. Provenance is
+`play_observed` for an explicit actual Play value, or `share_link_generated` for
+the separate Go generation path. An absent marker remains compatible with old
+checkpoints and means legacy unspecified provenance. Unknown markers are
+rejected. Both explicit modes require a nonnil referrer, and generated mode
+also requires installation inputs; a nonnil empty string remains valid.
+Invite codes, returned media and ReportUser `bind_uid` are never inferred from
+the input source or the share owner.
 
 | Method | Actual contract | Input provenance |
 | --- | --- | --- |
 | `ReportAndroidShareClick` | POST `/api/srn/ck`, captured common query plus form body | Public share-page app-open event |
 | `ReportAndroidInstall` | POST `/api/srn/ins`, endpoint query parameters, empty body | Android package/install and first-launch state |
-| `QueryAndroidInstallReferrer` | POST `/api/srn/ref`, same query plus optional `referer_data`, empty body | Actual Play `getInstallReferrer()` value or unavailable callback |
+| `QueryAndroidInstallReferrer` | POST `/api/srn/ref`, same query plus optional `referer_data`, empty body | Observed Play, unavailable, or explicitly generated shared-link input |
 | `ReportAndroidPostLoginAttribution` | GET `/api/activity/invite/v1/reportinvite`; POST `/newmain/reporter/userattribute`, query fields and empty body | Confirmed returned invite code; actual first-launch material scene |
 
 The click form contains the verified constants `pid=tera_sharelink` and
@@ -80,8 +86,46 @@ assignments.
 
 An absent/null `install_referrer` omits `referer_data`, matching the native
 unavailable/timeout query. An actual empty Play string sends `referer_data=`.
-The exact observed string is URL-encoded once; it is never reconstructed from
-the referral share metadata.
+The supplied string is URL-encoded once on the native query. Observed values
+are retained unchanged. Generation is a separate explicit operation.
+
+## Generated shared-link inputs
+
+After `PrepareWebmasterReferral`, `ResolveAndroidShareLinkReferrerInput` builds
+the canonical shared-page header route from the saved native metadata, without
+another HTTP request. The optional native `ctime`, `expiredtype`, `fcount` and
+`randsk` are preserved in referral snapshots. They map to `share_create_time`,
+`share_expired_time`, `share_file_count` and the already percent-encoded access
+key used by the shared-page JavaScript. `expiredtype=0` is present and valid;
+the producer's `share_expired_time` is an expiry type, not a timestamp. Missing
+metadata produces an error instead of a guessed value. The resolver selects
+the generated `h1__0_G2` header route explicitly; it does not claim a browser
+agency observation.
+
+`GenerateAndroidShareLinkReferrer` is an offline builder. It follows the actual
+module `1f03` field order and preserves the raw page-query suffix. Every call
+uses its own timestamp and an eight-digit cryptographic random suffix for
+`tera_link_id`. It encodes the inner query with JavaScript's `encodeURIComponent`
+safe character set, matching the layer observed at the Play getter. Browser
+`location.href` must already have its real URL serialization; the builder does
+not sort or re-encode that URL's query. A nil agency reproduces JavaScript
+`undefined`, while an explicit empty agency stays empty. `op_source` is copied
+through the page query only; the optional input checks consistency and never
+appends a second field. The inspected header route's type is 1; other explicit
+types are rejected. Share keys are supplied metadata, never generated.
+
+Bind the result and caller-supplied virtual installation inputs to the fresh
+profile's CUID with `provenance=share_link_generated`. Those inputs are derived
+in Go and must not be counted as an observed Play callback. Actual HTTP replies,
+media-cache behavior and durable attempted/succeeded report state follow the
+same native flow. Restore preserves the provenance and input bytes and never
+regenerates the referrer or retries a completed or uncertain report.
+
+The six fully synthetic vectors in
+`testdata/android_share_link_referrer_vectors.json` were produced by executing
+the original webpack module unchanged, with browser/deeplink dependencies
+stubbed and no HTTP. They cover nil/empty agency, JavaScript punctuation,
+Unicode, raw query ordering, `op_source`, and the page fragment.
 
 ## Returned and restored state
 

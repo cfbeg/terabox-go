@@ -13,12 +13,18 @@ import (
 // passport form fields or cookies. The APK Hy flow sends reg_source=share
 // during SendCode and retains its captured app profile and server cookies.
 type WebmasterReferral struct {
-	ShareURL      string      `json:"share_url"`
-	ShareFromSURL string      `json:"share_from_surl"`
-	WebmasterUK   int64       `json:"webmaster_uk"`
-	ShareID       int64       `json:"share_id"`
-	Files         []FileEntry `json:"files,omitempty"`
-	Source        string      `json:"source,omitempty"`
+	ShareURL        string `json:"share_url"`
+	ShareFromSURL   string `json:"share_from_surl"`
+	WebmasterUK     int64  `json:"webmaster_uk"`
+	ShareID         int64  `json:"share_id"`
+	ShareCreateTime *int64 `json:"share_create_time,omitempty"`
+	// ShareExpiredTime retains expiredtype, as used by the JS deeplink producer;
+	// despite its wire name, it is not an expiration timestamp.
+	ShareExpiredTime *int64      `json:"share_expired_time,omitempty"`
+	ShareFileCount   *int64      `json:"share_file_count,omitempty"`
+	Randsk           string      `json:"randsk,omitempty"`
+	Files            []FileEntry `json:"files,omitempty"`
+	Source           string      `json:"source,omitempty"`
 }
 
 // WebmasterReferralOptions selects the APK's shared-page source "share".
@@ -39,7 +45,30 @@ func cloneWebmasterReferral(ref *WebmasterReferral) *WebmasterReferral {
 	}
 	clone := *ref
 	clone.Files = append([]FileEntry(nil), ref.Files...)
+	for _, field := range []struct {
+		source *int64
+		target **int64
+	}{
+		{ref.ShareCreateTime, &clone.ShareCreateTime}, {ref.ShareExpiredTime, &clone.ShareExpiredTime}, {ref.ShareFileCount, &clone.ShareFileCount},
+	} {
+		if field.source != nil {
+			value := *field.source
+			*field.target = &value
+		}
+	}
 	return &clone
+}
+
+func validateWebmasterShareLinkMetadata(ref *WebmasterReferral) error {
+	for _, field := range []*int64{ref.ShareCreateTime, ref.ShareExpiredTime, ref.ShareFileCount} {
+		if field != nil && *field < 0 {
+			return errors.New("invalid optional share-link numeric metadata")
+		}
+	}
+	if !attributionStringValid(ref.Randsk) || shareURLHasControl(ref.Randsk) {
+		return errors.New("invalid share-link access key metadata")
+	}
+	return nil
 }
 
 // WebmasterReferral returns a copy of the prepared registration attribution.
@@ -106,6 +135,21 @@ func (c *Client) PrepareWebmasterReferralWithOptions(ctx context.Context, shareU
 		WebmasterUK: int64(info.UK), ShareID: int64(info.ShareID),
 		Files:  append([]FileEntry(nil), info.List...),
 		Source: source,
+	}
+	for _, field := range []struct {
+		source *Int64ish
+		target **int64
+	}{
+		{info.CTime, &ref.ShareCreateTime}, {info.ExpiredType, &ref.ShareExpiredTime}, {info.FCount, &ref.ShareFileCount},
+	} {
+		if field.source != nil {
+			value := int64(*field.source)
+			*field.target = &value
+		}
+	}
+	ref.Randsk = info.Randsk
+	if err := validateWebmasterShareLinkMetadata(ref); err != nil {
+		return nil, wrapErr(op, err)
 	}
 	c.mu.Lock()
 	c.referral = cloneWebmasterReferral(ref)
@@ -187,6 +231,9 @@ func (c *Client) RestoreWebmasterRegistrationSession(saved *WebmasterRegistratio
 			return wrapErr(op, errors.New("invalid referral metadata"))
 		}
 		if err := validateReferralSource(saved.Referral.Source); err != nil {
+			return wrapErr(op, err)
+		}
+		if err := validateWebmasterShareLinkMetadata(&saved.Referral); err != nil {
 			return wrapErr(op, err)
 		}
 	}

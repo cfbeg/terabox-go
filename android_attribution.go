@@ -34,7 +34,8 @@ type AndroidClickAttribution struct {
 	BridgeBody     map[string]string `json:"bridge_body,omitempty"`
 }
 
-// AndroidInstallAttribution contains OS/application installation observations.
+// AndroidInstallAttribution contains OS/application installation inputs. The
+// capture's Provenance distinguishes observations from generated inputs.
 // InstallTime is PackageInfo.firstInstallTime in milliseconds; FirstLaunchTime
 // is the saved first_launch_time Unix seconds multiplied by 1000. The APK sends
 // an empty Clipboard, independently of its separate clipboard deeplink parser.
@@ -50,12 +51,19 @@ type AndroidInstallAttribution struct {
 	IsFirstLaunch   bool   `json:"is_first_launch"`
 }
 
-// AndroidAttributionCapture binds observed browser/install provenance to the
-// actual installation's CUID. A nil InstallReferrer means it was unavailable;
-// a pointer to "" means Play returned an actual empty string. Neither value is
-// replaced with a guessed campaign, shared URL or Webmaster owner identifier.
+const (
+	AndroidAttributionProvenancePlayObserved       = "play_observed"
+	AndroidAttributionProvenanceShareLinkGenerated = "share_link_generated"
+)
+
+// AndroidAttributionCapture binds attribution inputs to one installation's
+// CUID. Provenance distinguishes an observed Play value from a Go-generated
+// share-link value. Empty provenance preserves legacy saved-input semantics;
+// it does not independently establish that Play was observed. A nil referrer
+// remains unavailable, while a nonnil empty string is an explicit input.
 type AndroidAttributionCapture struct {
 	DeviceID        string                     `json:"device_id"`
+	Provenance      string                     `json:"provenance,omitempty"`
 	Click           *AndroidClickAttribution   `json:"click,omitempty"`
 	Install         *AndroidInstallAttribution `json:"install,omitempty"`
 	InstallReferrer *string                    `json:"install_referrer,omitempty"`
@@ -140,6 +148,20 @@ func attributionStringValid(value string) bool {
 }
 
 func validateAndroidAttributionCapture(capture AndroidAttributionCapture, deviceID string) error {
+	switch capture.Provenance {
+	case "":
+		// Existing snapshots have no provenance marker and remain restorable.
+	case AndroidAttributionProvenancePlayObserved:
+		if capture.InstallReferrer == nil {
+			return errors.New("observed Play provenance requires its returned referrer")
+		}
+	case AndroidAttributionProvenanceShareLinkGenerated:
+		if capture.InstallReferrer == nil || capture.Install == nil {
+			return errors.New("generated share-link provenance requires installation inputs and a referrer")
+		}
+	default:
+		return errors.New("unsupported Android attribution provenance")
+	}
 	if capture.DeviceID == "" || capture.DeviceID != deviceID {
 		return errors.New("attribution capture must belong to this Android installation's device ID")
 	}
@@ -452,7 +474,7 @@ func androidReferrerMediaSource(referrer *AndroidReferrerData) string {
 	return *referrer.MediaSource
 }
 
-// SetAndroidAttributionCapture validates and saves provenance before any HTTP
+// SetAndroidAttributionCapture validates and saves attribution inputs before any HTTP
 // operation. It cannot replace an existing capture or attach it to a different
 // CUID. Restoring an installation uses RestoreWebmasterRegistrationSession.
 func (c *Client) SetAndroidAttributionCapture(capture AndroidAttributionCapture) error {
@@ -581,7 +603,7 @@ func (c *Client) attributionBegin(operation string) (bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.androidAttribution == nil {
-		return false, errors.New("observed Android attribution capture is required")
+		return false, errors.New("Android attribution inputs are required")
 	}
 	report := c.attributionReportLocked(operation)
 	if report.Succeeded {
