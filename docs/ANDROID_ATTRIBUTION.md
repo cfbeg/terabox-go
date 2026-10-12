@@ -55,7 +55,7 @@ unavailable; otherwise it is `PackageInfo.firstInstallTime` in milliseconds.
 Missing observations are not replaced with the time of account creation.
 `is_first_launch` is explicit local state and is not an HTTP parameter.
 
-The Play Store 4.26.5 first-launch capture also observes `device_country` in the
+The Play-installed TeraBox 4.26.5 first-launch capture also observes `device_country` in the
 native common query. The common interceptor appends it after the endpoint's
 country: the captured `/ins` and `/ref` URLs contain `device_country=JP` followed
 by `device_country=jp`. The SDK retains this repeated parameter and its value
@@ -137,6 +137,14 @@ The contracts come from the supplied APK SHA-256
 consumers, and the public shared-page modules `1f03`, `35d0`, and `7404`.
 Click wire replay executes those actual bundled functions offline. This does
 not establish the service's Webmaster credit eligibility rules.
+
+The real Play installation is also TeraBox 4.26.5 (version code 699), but its
+base APK SHA-256 is
+`c82a4429bee57e59f45709d358314950e2220191c2c9d774a443242df13cdad8`.
+Its APK and analyzed DEX hashes differ from the supplied APK; the embedded
+Hy login asset `login.409326c5.js` is byte-identical. The Play first-launch
+requests and complete HTTP responses are independent runtime evidence, not a
+claim that the installed binary has the supplied APK's hashes or offsets.
 
 Additional verified offsets: `RequestCommonParams.c` `0xcf181c`, `aw.b.t`
 `0xa4b740`, `aw.q.k` `0xa4d1f0`, `aw.e.___` `0xa4c634`, `aw.e.____`
