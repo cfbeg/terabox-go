@@ -55,6 +55,24 @@ unavailable; otherwise it is `PackageInfo.firstInstallTime` in milliseconds.
 Missing observations are not replaced with the time of account creation.
 `is_first_launch` is explicit local state and is not an HTTP parameter.
 
+The Play Store 4.26.5 first-launch capture also observes `device_country` in the
+native common query. The common interceptor appends it after the endpoint's
+country: the captured `/ins` and `/ref` URLs contain `device_country=JP` followed
+by `device_country=jp`. The SDK retains this repeated parameter and its value
+order when `native_params` contains the observed common country. It does not
+derive a lowercase country or add an unobserved common value. The other install
+fields remain owned by the endpoint; absent nullable inputs stay absent. The
+sanitized `testdata/android_play_attribution_wire.json` fixture retains all
+captured query names and their multiplicity, with private identifiers and
+referrer contents replaced by test values.
+
+Common inputs must describe the request's observation time. In this capture,
+both initial requests have an empty `ab_variant_b`, while the later standalone
+common-parameter observation has `ab_variant_b=0`. Replaying an initial request
+with the later map changes the wire input. The fixture uses the captured
+send-time value; the SDK preserves supplied common values without inferring AB
+assignments.
+
 An absent/null `install_referrer` omits `referer_data`, matching the native
 unavailable/timeout query. An actual empty Play string sends `referer_data=`.
 The exact observed string is URL-encoded once; it is never reconstructed from

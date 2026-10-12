@@ -141,6 +141,10 @@ func TestAndroidSignURLPreservesNativeRawURLBehavior(t *testing.T) {
 	for _, raw := range []string{
 		"https://terabox.com/api/list?z=last&time=1700000000123&version=4.26.5&a=first",
 		"https://terabox.com/api/list?version=4.26.5&z=last&time=1700000000123",
+		// Native signing preserves repeated values in the endpoint/interceptor
+		// order. They do not participate in a sorted canonical-query digest.
+		"https://terabox.com/api/srn/ref?device_country=JP&device_country=jp&time=1700000000123&version=4.26.5",
+		"https://terabox.com/api/srn/ref?device_country=jp&device_country=JP&time=1700000000123&version=4.26.5",
 		// The native character class really includes '|', not just '?'/ '&'.
 		"https://terabox.com/api/list?z=value|time=1700000000123&version=4.26.5",
 	} {

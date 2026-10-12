@@ -294,8 +294,13 @@ func (c *Client) androidAppAPIRequestWithTransport(req *http.Request, forceLegac
 			continue
 		}
 		if (clone.URL.Path == "/api/srn/ins" || clone.URL.Path == "/api/srn/ref") && androidAttributionEndpointField(key) {
-			// Retrofit endpoint @Query observations take precedence over cached
-			// common state. An absent nullable query must also remain absent.
+			// The observed common interceptor appends its own country after the
+			// endpoint country (for example JP, then jp). Keep both values in
+			// that order; they describe separate observed sources. Other endpoint
+			// fields remain owned by @Query, including absent nullable fields.
+			if key == "device_country" {
+				query.Add(key, value)
+			}
 			continue
 		}
 		query.Set(key, value)

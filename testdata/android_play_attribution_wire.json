@@ -1,0 +1,281 @@
+{
+  "provenance": {
+    "source": "Play Store com.dubox.drive 4.26.5 versionCode 699 first-launch wire, 2026-10-13",
+    "private_values": "Identity, native channel, logid tuple, timestamps, ZID, and referrer contents replaced with synthetic values; captured query names, duplicate order, and public common values retained.",
+    "common_timing": "The later pure-common observation has ab_variant_b=0; both first-launch requests have ab_variant_b empty. The replay uses the observed send-time value."
+  },
+  "now_ms": 1700000001000,
+  "native_params": {
+    "devuid": "fixture-cuid",
+    "cuid": "fixture-cuid",
+    "clienttype": "1",
+    "channel": "fixture-native-channel",
+    "version": "4.26.5",
+    "logid": "MTcwMDAwMDAwMTAwMCwxMjcuMC4wLjEsMTIz",
+    "network_type": "wifi",
+    "apn_id": "1_0",
+    "lang": "ja_JP",
+    "carrier": "44000JP_44000JP",
+    "startDevTime": "1700000001000",
+    "versioncode": "699",
+    "ZID": "fixture-zid",
+    "isVip": "0",
+    "vip_type": "0",
+    "carrier_country": "jp",
+    "device_country": "jp",
+    "phone_brand": "OnePlus",
+    "bgstatus": "0",
+    "activestatus": "0",
+    "firstlaunchtime": "1700000001",
+    "af_media_source": "Undefined",
+    "time": "1700000001000",
+    "rand": "",
+    "ab_variant_a": "",
+    "ab_variant_b": "",
+    "ab_variant_c": "",
+    "ab_variant_d": "",
+    "ab_variant_e": ""
+  },
+  "install": {
+    "clipboard": "",
+    "device_country": "JP",
+    "device_lang": "ja",
+    "os_version": "9",
+    "device": "HD1910",
+    "install_time": 1700000000123,
+    "first_launch_time": 1700000001000,
+    "is_first_launch": true
+  },
+  "install_referrer": "utm_source=tera_sharelink&utm_campaign=header_button&surl=fixture&af_dp=dubox%3A%2F%2Fshare_detail%3Fuk%3D123%26shareid%3D456%26randsk%3Dfixture%252B%253D",
+  "requests": [
+    {
+      "path": "/api/srn/ins",
+      "method": "POST",
+      "body": "",
+      "query": {
+        "clipboard": [
+          ""
+        ],
+        "device_country": [
+          "JP",
+          "jp"
+        ],
+        "device_lang": [
+          "ja"
+        ],
+        "os_version": [
+          "9"
+        ],
+        "device": [
+          "HD1910"
+        ],
+        "install_time": [
+          "1700000000123"
+        ],
+        "first_launch_time": [
+          "1700000001000"
+        ],
+        "devuid": [
+          "fixture-cuid"
+        ],
+        "cuid": [
+          "fixture-cuid"
+        ],
+        "clienttype": [
+          "1"
+        ],
+        "channel": [
+          "fixture-native-channel"
+        ],
+        "version": [
+          "4.26.5"
+        ],
+        "logid": [
+          "MTcwMDAwMDAwMTAwMCwxMjcuMC4wLjEsMTIz"
+        ],
+        "network_type": [
+          "wifi"
+        ],
+        "apn_id": [
+          "1_0"
+        ],
+        "lang": [
+          "ja_JP"
+        ],
+        "carrier": [
+          "44000JP_44000JP"
+        ],
+        "startDevTime": [
+          "1700000001000"
+        ],
+        "versioncode": [
+          "699"
+        ],
+        "ZID": [
+          "fixture-zid"
+        ],
+        "isVip": [
+          "0"
+        ],
+        "vip_type": [
+          "0"
+        ],
+        "carrier_country": [
+          "jp"
+        ],
+        "phone_brand": [
+          "OnePlus"
+        ],
+        "bgstatus": [
+          "0"
+        ],
+        "activestatus": [
+          "0"
+        ],
+        "firstlaunchtime": [
+          "1700000001"
+        ],
+        "af_media_source": [
+          "Undefined"
+        ],
+        "time": [
+          "1700000001000"
+        ],
+        "rand": [
+          ""
+        ],
+        "ab_variant_a": [
+          ""
+        ],
+        "ab_variant_b": [
+          ""
+        ],
+        "ab_variant_c": [
+          ""
+        ],
+        "ab_variant_d": [
+          ""
+        ],
+        "ab_variant_e": [
+          ""
+        ]
+      }
+    },
+    {
+      "path": "/api/srn/ref",
+      "method": "POST",
+      "body": "",
+      "query": {
+        "referer_data": [
+          "utm_source=tera_sharelink&utm_campaign=header_button&surl=fixture&af_dp=dubox%3A%2F%2Fshare_detail%3Fuk%3D123%26shareid%3D456%26randsk%3Dfixture%252B%253D"
+        ],
+        "clipboard": [
+          ""
+        ],
+        "device_country": [
+          "JP",
+          "jp"
+        ],
+        "device_lang": [
+          "ja"
+        ],
+        "os_version": [
+          "9"
+        ],
+        "device": [
+          "HD1910"
+        ],
+        "install_time": [
+          "1700000000123"
+        ],
+        "first_launch_time": [
+          "1700000001000"
+        ],
+        "devuid": [
+          "fixture-cuid"
+        ],
+        "cuid": [
+          "fixture-cuid"
+        ],
+        "clienttype": [
+          "1"
+        ],
+        "channel": [
+          "fixture-native-channel"
+        ],
+        "version": [
+          "4.26.5"
+        ],
+        "logid": [
+          "MTcwMDAwMDAwMTAwMCwxMjcuMC4wLjEsMTIz"
+        ],
+        "network_type": [
+          "wifi"
+        ],
+        "apn_id": [
+          "1_0"
+        ],
+        "lang": [
+          "ja_JP"
+        ],
+        "carrier": [
+          "44000JP_44000JP"
+        ],
+        "startDevTime": [
+          "1700000001000"
+        ],
+        "versioncode": [
+          "699"
+        ],
+        "ZID": [
+          "fixture-zid"
+        ],
+        "isVip": [
+          "0"
+        ],
+        "vip_type": [
+          "0"
+        ],
+        "carrier_country": [
+          "jp"
+        ],
+        "phone_brand": [
+          "OnePlus"
+        ],
+        "bgstatus": [
+          "0"
+        ],
+        "activestatus": [
+          "0"
+        ],
+        "firstlaunchtime": [
+          "1700000001"
+        ],
+        "af_media_source": [
+          "Undefined"
+        ],
+        "time": [
+          "1700000001000"
+        ],
+        "rand": [
+          ""
+        ],
+        "ab_variant_a": [
+          ""
+        ],
+        "ab_variant_b": [
+          ""
+        ],
+        "ab_variant_c": [
+          ""
+        ],
+        "ab_variant_d": [
+          ""
+        ],
+        "ab_variant_e": [
+          ""
+        ]
+      }
+    }
+  ]
+}

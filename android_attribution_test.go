@@ -38,7 +38,7 @@ func attributionFixtureCapture(profile AndroidAppProfile) AndroidAttributionCapt
 func attributionFixtureClient(t *testing.T, transport http.RoundTripper) *Client {
 	t.Helper()
 	profile := androidFixtureProfile()
-	profile.NativeParams = map[string]string{"af_media_source": "Undefined", "captured_native": "value", "device_country": "stale-template-country",
+	profile.NativeParams = map[string]string{"af_media_source": "Undefined", "captured_native": "value", "device_country": "jp",
 		"device_lang": "stale-template-language", "install_time": "stale-template-time", "referer_data": "stale-template-referrer"}
 	profile.LegacyNativeParams = map[string]string{"af_media_source": "Undefined"}
 	client, err := NewAndroidAppClient(profile, WithHTTPClient(&http.Client{Transport: transport}))
@@ -99,6 +99,9 @@ func TestAndroidAttributionCapturedWireAndMediaPropagation(t *testing.T) {
 				t.Errorf("native attribution contract contains wrong body/common/owner fields")
 			}
 			for key, values := range androidInstallAttributionQuery(capture.Install) {
+				if key == "device_country" {
+					values = append(values, client.AndroidAppProfile().NativeParams[key])
+				}
 				if !reflect.DeepEqual(q[key], values) {
 					t.Errorf("observed install field %q changed", key)
 				}
