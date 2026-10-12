@@ -1,0 +1,32 @@
+{
+  "apk": {
+    "version": "4.26.5",
+    "sha256": "73340b723c45cca9bb44289b1ca3ea2e5e207f4af406a6970bb2ef1badf7f696"
+  },
+  "transfer": {
+    "source": "classes12.dex Lln/__; B code=0xdf8800; Llj/_; c code=0xd5e700",
+    "method": "POST",
+    "path": "/share/transfer",
+    "query": {"from":"202","shareid":"101","bot_uk":"","sekey":"observed+key"},
+    "form": {"path":"/saved","async":"1","fsidlist":"[\"303\",\"304\"]","ondup":"newcopy","ck_val":"observed-fixture-ck"}
+  },
+  "report": {
+    "source": "classes13.dex ChainInfoViewModel.h 0xa7ef60 -> h30.t1.b 0xdad0dc -> server._.l0 0xc3e944",
+    "method": "POST",
+    "path": "/rest/receive/report",
+    "body": {"list":[{"optype":4,"scene":2,"unikey":"1fixturekey"}],"origin":0}
+  },
+  "task": {
+    "source": "classes12.dex b0.b 0xabfd48+0x134 -> service.___.h 0xabebb0 -> g 0xabeb28 -> ln.__.u 0xdf9708",
+    "method": "POST",
+    "path": "/api/taskquery",
+    "query": {"taskid":"7"},
+    "form": {"filelist":"[{}]"}
+  },
+  "listing": {
+    "source": "classes12.dex Lln/__; p 0xdf920c",
+    "method": "GET",
+    "path": "/api/list",
+    "query": {"dir":"/saved","start":"0","limit":"100","order":"name","preset":"0"}
+  }
+}

@@ -76,7 +76,11 @@ type PassportResponse struct {
 	CanSkipCode int    `json:"can_skip_code"`
 	// NDUS is the native data.ndus from successful app login/registration,
 	// checked against a Set-Cookie ndus when one is returned.
-	NDUS        string `json:"-"`
+	NDUS string `json:"-"`
+	// Raw preserves the received envelope for private recovery checkpoints.
+	Raw         json.RawMessage `json:"-"`
+	RawBody     []byte          `json:"raw_body,omitempty"`
+	HTTPStatus  int             `json:"http_status,omitempty"`
 	codePresent bool
 }
 
@@ -92,6 +96,7 @@ func (r *PassportResponse) UnmarshalJSON(b []byte) error {
 		return err
 	}
 	*r = PassportResponse(wire.plain)
+	r.Raw = append(json.RawMessage(nil), b...)
 	if wire.Code != nil {
 		r.Code = *wire.Code
 		r.codePresent = true
@@ -141,7 +146,7 @@ func (c *Client) PassportPreLogin(ctx context.Context, email string) (*PreLoginR
 		headers: c.androidH5Headers(),
 	}, &resp)
 	if err != nil {
-		return nil, err
+		return &resp, err
 	}
 	return &resp, nil
 }
@@ -214,7 +219,7 @@ func (c *Client) PassportLogin(ctx context.Context, pre *PreLoginResponse, email
 		},
 	}, &resp)
 	if err != nil {
-		return nil, err
+		return &resp, err
 	}
 	if chErr := c.maybeChallenge(&resp, true); chErr != nil {
 		return nil, chErr
@@ -276,10 +281,10 @@ func (c *Client) RegisterSendCode(ctx context.Context, email string) (*PassportR
 		onResponse: func(r *http.Response) { pendingCookies = r.Cookies() },
 	}, &resp)
 	if err != nil {
-		return nil, err
+		return &resp, err
 	}
 	if chErr := c.maybeChallenge(&resp, false); chErr != nil {
-		return nil, chErr
+		return &resp, chErr
 	}
 	if resp.Code == 0 && resp.Errno == 0 {
 		if !resp.codePresent {
@@ -293,6 +298,7 @@ func (c *Client) RegisterSendCode(ctx context.Context, email string) (*PassportR
 		c.registrationToken = resp.Token
 		c.mu.Unlock()
 		c.advanceAndroidRegistrationPage(true)
+		c.clearAndroidChallenge("/passport/register_v4/sendcode")
 	}
 	return &resp, nil
 }
@@ -324,10 +330,10 @@ func (c *Client) RegisterVerify(ctx context.Context, regToken, code string) (*Pa
 		onResponse: func(r *http.Response) { pendingCookies = r.Cookies() },
 	}, &resp)
 	if err != nil {
-		return nil, err
+		return &resp, err
 	}
 	if chErr := c.maybeChallenge(&resp, false); chErr != nil {
-		return nil, chErr
+		return &resp, chErr
 	}
 	if resp.Code == 0 && resp.Errno == 0 {
 		if !resp.codePresent {
@@ -335,6 +341,7 @@ func (c *Client) RegisterVerify(ctx context.Context, regToken, code string) (*Pa
 		}
 		c.mergeCookies(pendingCookies)
 		c.advanceAndroidRegistrationPage(false)
+		c.clearAndroidChallenge("/passport/register_v4/verify")
 	}
 	return &resp, nil
 }
@@ -399,22 +406,29 @@ func (c *Client) RegisterFinish(ctx context.Context, regToken, password string) 
 		// A returned session cookie can outlive a malformed response. Preserve
 		// it for account-status checks instead of silently repeating account
 		// creation. The response code is explicitly unknown in this case.
+		if ndus == "" {
+			ndus = recoverableAndroidNDUS(&resp)
+			if ndus != "" {
+				pendingCookies = append(pendingCookies, &http.Cookie{Name: "ndus", Value: ndus})
+			}
+		}
 		if ndus != "" {
 			c.commitReferralRegistration(pendingCookies, ndus, false)
-			return &PassportResponse{Code: -1, Msg: "registration outcome unknown", NDUS: ndus}, err
+			resp.Code, resp.Msg, resp.NDUS = -1, "registration outcome unknown", ndus
+			return &resp, err
 		}
-		return nil, err
+		return &resp, err
 	}
 	if chErr := c.maybeChallenge(&resp, false); chErr != nil {
 		c.resetReferralFinishAttempt()
-		return nil, chErr
+		return &resp, chErr
 	}
 	if !resp.codePresent && resp.Errno == 0 {
 		if ndus != "" {
 			c.commitReferralRegistration(pendingCookies, ndus, false)
 		}
-		return &PassportResponse{Code: -1, Msg: "registration outcome unknown", NDUS: ndus},
-			wrapErr(op, fmt.Errorf("registration response is missing code; check account state before retrying registration"))
+		resp.Code, resp.Msg, resp.NDUS = -1, "registration outcome unknown", ndus
+		return &resp, wrapErr(op, fmt.Errorf("registration response is missing code; check account state before retrying registration"))
 	}
 	if resp.Code != 0 || resp.Errno != 0 {
 		c.resetReferralFinishAttempt()
@@ -422,6 +436,12 @@ func (c *Client) RegisterFinish(ctx context.Context, regToken, password string) 
 	if resp.Code == 0 && resp.Errno == 0 {
 		nativeNDUS, uid, identityErr := androidFinishIdentity(&resp, ndus)
 		if identityErr != nil {
+			if ndus == "" {
+				ndus = recoverableAndroidNDUS(&resp)
+				if ndus != "" {
+					pendingCookies = append(pendingCookies, &http.Cookie{Name: "ndus", Value: ndus})
+				}
+			}
 			if ndus != "" {
 				c.commitReferralRegistration(pendingCookies, ndus, false)
 			}
@@ -436,6 +456,7 @@ func (c *Client) RegisterFinish(ctx context.Context, regToken, password string) 
 		resp.NDUS = ndus
 		c.commitReferralRegistration(pendingCookies, ndus, true)
 		c.applyAndroidAccountRegion(&resp)
+		c.clearAndroidChallenge("/passport/register_v4/finish")
 	}
 	return &resp, nil
 }
@@ -502,7 +523,7 @@ func (c *Client) challengeURL() string {
 // data is a silent refusal; for the register endpoints code=0+null data
 // is a legitimate success shape (the token is top-level).
 func (c *Client) maybeChallenge(resp *PassportResponse, nullDataMeansChallenge bool) error {
-	explicit := resp.Errno == 460030 || strings.EqualFold(resp.ErrMsg, "dragdrop")
+	explicit := resp.Errno == 460030 || resp.Code == 460030 || resp.Code == 104 || resp.Code == 106 || strings.EqualFold(resp.ErrMsg, "dragdrop")
 	silent := nullDataMeansChallenge && resp.Code == 0 && isNullJSON(resp.Data)
 	if !explicit && !silent {
 		return nil
@@ -518,6 +539,10 @@ func (c *Client) maybeChallenge(resp *PassportResponse, nullDataMeansChallenge b
 	if id == "" && resp.RequestID != "" {
 		id = resp.RequestID.String()
 	}
+	c.mu.Lock()
+	c.data.pendingChallenge = &AndroidPassportChallenge{RequestID: id, Path: c.data.passportPath}
+	c.data.challengeIdentity = nil
+	c.mu.Unlock()
 	return &LoginChallengeError{
 		Errno:        resp.Errno,
 		Code:         resp.Code,

@@ -1,6 +1,7 @@
 package terabox
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -20,9 +21,12 @@ const defaultTimeout = 10 * time.Second
 
 // appData contains only the tokens used by the APK's Hy login page.
 type appData struct {
-	pcfToken string
-	jsToken  string
-	pubKey   string
+	pcfToken          string
+	jsToken           string
+	pubKey            string
+	pendingChallenge  *AndroidPassportChallenge
+	challengeIdentity *AndroidChallengeIdentity
+	passportPath      string
 }
 
 type accountParams struct{ accountID int64 }
@@ -259,6 +263,8 @@ func apkRequestPath(path string) bool {
 	case "/passport/getpubkey", "/passport/prelogin", "/passport/login",
 		"/passport/register_v4/sendcode", "/passport/register_v4/verify", "/passport/register_v4/finish",
 		"/api/shorturlinfo", "/share/list", "/share/transfer", "/api/report/user", "/api/account/uinfo",
+		"/rest/receive/report", "/api/taskquery", "/api/list",
+		"/api/activity/invite/v1/reportinvite", "/newmain/reporter/userattribute",
 		"/api/srn/ck", "/api/srn/ins", "/api/srn/ref",
 		"/rest/1.0/imact/miner/pull", "/rest/1.0/imact/miner/start", "/rest/1.0/imact/miner/getitem",
 		"/rest/1.0/imact/miner/finishgame", "/rest/1.0/inte/system/getrecord",
@@ -285,14 +291,16 @@ func (c *Client) validateEndpoint(u *url.URL) error {
 }
 
 type requestOpts struct {
-	method     string
-	path       string
-	query      url.Values
-	form       *formValues
-	headers    map[string]string
-	noCookie   bool
-	timeout    time.Duration
-	onResponse func(*http.Response)
+	method       string
+	path         string
+	query        url.Values
+	form         *formValues
+	jsonBody     json.RawMessage
+	legacyNative bool
+	headers      map[string]string
+	noCookie     bool
+	timeout      time.Duration
+	onResponse   func(*http.Response)
 }
 
 func (c *Client) doJSON(ctx context.Context, op string, options *requestOpts, out any) error {
@@ -303,7 +311,7 @@ func (c *Client) doJSON(ctx context.Context, op string, options *requestOpts, ou
 	if err != nil {
 		return wrapErr(op, err)
 	}
-	req, err = c.androidAppAPIRequest(req)
+	req, err = c.androidAppAPIRequestWithTransport(req, options.legacyNative)
 	if err != nil {
 		return wrapErr(op, err)
 	}
@@ -316,16 +324,54 @@ func (c *Client) doJSON(ctx context.Context, op string, options *requestOpts, ou
 		return wrapErr(op, err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return wrapErr(op, &httpStatusError{StatusCode: resp.StatusCode})
-	}
 	if options.onResponse != nil {
 		options.onResponse(resp)
 	}
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, (16<<20)+1))
+	if len(body) > 16<<20 {
+		body = body[:16<<20]
+		readErr = errors.New("APK response exceeds its read limit")
+	}
+	defer preserveAPKRawResponse(out, body, resp.StatusCode)
+	if readErr != nil {
+		return wrapErr(op, errors.New("APK response is incomplete or exceeds its read limit"))
+	}
+	if resp.StatusCode != http.StatusOK {
+		if json.Valid(body) {
+			_ = json.Unmarshal(body, out)
+		}
+		return wrapErr(op, &httpStatusError{StatusCode: resp.StatusCode})
+	}
+	if err := json.Unmarshal(body, out); err != nil {
 		return wrapErr(op, err)
 	}
 	return nil
+}
+
+func preserveAPKRawResponse(out any, body []byte, status int) {
+	copy := append(json.RawMessage(nil), body...)
+	if !json.Valid(body) {
+		copy = nil
+	}
+	switch result := out.(type) {
+	case *PassportResponse:
+		result.Raw = copy
+		result.RawBody = append([]byte(nil), body...)
+		result.HTTPStatus = status
+	case *ShareViewReportResponse:
+		result.Raw = copy
+		result.RawBody = append([]byte(nil), body...)
+	case *ShareTransferResponse:
+		result.Raw = copy
+		result.RawBody = append([]byte(nil), body...)
+		result.HTTPStatus = status
+	case *ShareTransferTaskResponse:
+		result.Raw = copy
+		result.RawBody = append([]byte(nil), body...)
+	case *FileListResponse:
+		result.Raw = copy
+		result.RawBody = append([]byte(nil), body...)
+	}
 }
 
 func (c *Client) newRequest(ctx context.Context, options *requestOpts) (*http.Request, error) {
@@ -345,8 +391,16 @@ func (c *Client) newRequest(ctx context.Context, options *requestOpts) (*http.Re
 		u.RawQuery += options.query.Encode()
 	}
 	var body io.Reader
+	if options.form != nil && options.jsonBody != nil {
+		return nil, errors.New("request cannot carry both form and JSON bodies")
+	}
 	if options.form != nil {
 		body = strings.NewReader(options.form.String())
+	} else if options.jsonBody != nil {
+		if !json.Valid(options.jsonBody) {
+			return nil, errors.New("request JSON body is invalid")
+		}
+		body = bytes.NewReader(options.jsonBody)
 	}
 	method := options.method
 	if method == "" {
@@ -362,6 +416,8 @@ func (c *Client) newRequest(ctx context.Context, options *requestOpts) (*http.Re
 	}
 	if options.form != nil {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	} else if options.jsonBody != nil {
+		req.Header.Set("Content-Type", "application/json; charset=UTF-8")
 	}
 	for key, value := range options.headers {
 		req.Header.Set(key, value)

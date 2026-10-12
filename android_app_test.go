@@ -66,6 +66,8 @@ func TestAndroidAppRegistrationMatchesAPKReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	privateKey, keyResponse := androidPubkeyFixture(t)
+	// This profile's route has no from=share, so the actual APK UI omits it.
+	delete(expected[0].Data, "reg_source")
 	steps := []string{"/wap/hylogin/emailRegister", "/passport/register_v4/sendcode", "/passport/register_v4/verify", "/passport/getpubkey", "/passport/register_v4/finish"}
 	next := 0
 	client, err := NewAndroidAppClient(androidFixtureProfile(), WithHTTPClient(&http.Client{Transport: shareRoundTripFunc(func(req *http.Request) (*http.Response, error) {

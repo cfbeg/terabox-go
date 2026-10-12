@@ -7,8 +7,10 @@ request families from the app's captured runtime identity.
 Required profile fields are `device_id`, `version`, `user_agent`,
 `native_channel`, `language`, `client_type` (1), and an HTTPS TeraBox Hy
 `page_url`. Hy `channel` uses the page URL's channel or the captured UA.
-Guest UID and encoded SK may be empty. No device ID, installation source,
-country or native UID is generated or inferred.
+Guest UID and encoded SK may be empty. The constructor uses the supplied
+identity. The separate `NewAndroidGuestProfile` factory creates a virtual
+installation profile; it does not create an actual Play installation/referrer
+or infer a native account UID.
 
 `native_params` contains the captured Retrofit common query map;
 `legacy_native_params` contains the older native map used by shorturlinfo,
@@ -22,8 +24,10 @@ Hy `ck_data` and transfer `native_ck_data` belong to separate native providers.
 
 Observed shared-page click and Android installation/referrer attribution can
 be imported or explicitly reported with the [capture APIs](ANDROID_ATTRIBUTION.md).
-They retain the actual installation identity, preserve server responses in saved
-sessions, and apply only confirmed first-launch media to native requests.
+They retain the actual installation identity and preserve server responses in
+sessions. Stored attribution and the effective native process media cache are
+preserved separately; a returned media value does not immediately overwrite
+an already initialized native common value.
 
 ## Hy registration and login
 
@@ -57,17 +61,26 @@ PCF follows the APK's `wa()` selection: nonempty `__INITIAL_STATE__.pcftoken`
 precedes `templateData.pcftoken`, regardless of their assignment order. Hy
 `jsToken` follows `Dr()` and comes from the actual `window.jsToken` global,
 including an observed top-level `var jsToken` literal; a similarly named field
-inside either state object is not its source. Captured single/double-quoted
-literals and standard JS escapes are decoded without executing page JavaScript.
-Dynamic global-token expressions require a separate runtime capture and are
-rejected explicitly. Redirect cookies replace/delete previous names in a
+inside either state object is not its source. Simple literals use the bounded
+static decoder. Dynamic globals and FSEC bootstrap use the Go `goja` runtime
+to execute the observed synchronous bootstrap sources. Runtime source and
+random/time/entropy inputs are saved in `hy_runtime` for identity-bound replay.
+Redirect cookies replace/delete previous names in a
 request-local copy; cookies and bootstrap state are committed together after a
 valid final page. The saved `hy_js_token` retains the actual global token;
 older sessions without that field keep the empty default.
 
-The inspected runtime had no `window.fsec`, whose
-plaintext email branch is explicitly supported in the APK. An initializing
-fsec page is rejected until its runtime encryptor has been captured.
+When the actual page defines `window.fsec.encrypt`, the runtime executes the
+APK branch `fsec.encrypt(email).slice(8)`. With no FSEC object, the verified
+plaintext branch remains active. Referenced FSEC assets are fetched only from
+HTTPS `terabox.com` or `teraboxcdn.com` and their subdomains, with source-size and execution
+bounds. The runtime supports synchronous bootstrap globals and the observed
+encryptor, and rejects unobserved browser dependencies such as network APIs,
+timers, DOM fingerprinting and native bridges. It does not execute the full
+application or CAPTCHA UI. The SDK uses its pinned Go `goja` dependency; no
+external browser or Node process is required. Synthetic runtime tests cover
+dynamic tokens/FSEC and restoration. FSEC-active registration has not been
+observed in the live account test.
 
 Native psign retrieval uses POST `/passport/getpubkey`, passport version 2.0.
 It computes `MD5hex(MD5hex(CUID+"android"+pp3)+pp3)`; missing/failed pp3 uses
@@ -104,7 +117,9 @@ Restore it on a fresh `NewAndroidAppClient` with the same captured identity.
 A session lacking an app profile is rejected. A completed or ambiguous Finish
 cannot be repeated; retry only subsequent configuration or transfer work.
 Captcha results retain RequestID and the captured Hy page for the app's
-verification UI and the same session.
+verification UI and the same session. `SetAndroidChallengeIdentity` accepts
+an actually completed identity matching that request; it does not generate a
+challenge token. Runtime snapshots and challenge state also survive restore.
 
 ## Post-login configuration and sharing
 
@@ -116,23 +131,27 @@ trailing space. Request timestamp is refreshed. Explicit errno=0 and nonempty
 flat uinfo are required; the encoded key is checked under the native UID.
 Failure leaves account/session/previous configuration intact.
 
-The older authenticated native base derives bdstoken as lowercase MD5 of NDUS.
-Retrofit sharing uses its own common fields and form conventions. Native
-transfer query is shareid/from/bot_uk; its form is path/async/fsidlist/ondup
-plus native CK fields. Task acceptance remains distinct from saved-file
-completion and Webmaster acquisition accounting.
+The older authenticated native base derives bdstoken as lowercase MD5 of NDUS:
+GET carries it in the query, POST in the endpoint form. `TransferShare` supports
+the Retrofit MultiShareList branch and the explicit `share_detail_legacy`
+route, whose file-ID array contains strings and whose common transport differs.
+Its query uses shareid/from/bot_uk and observed optional sekey; the form carries
+path/async/fsidlist/ondup plus the relevant native checks. `ReportShareView`
+reproduces `POST /rest/receive/report` with its received-link JSON body and
+skips actual Hive/history/self entries. Task acknowledgement remains distinct
+from saved-file existence and Webmaster acquisition accounting.
 
-The implemented transfer contract is the APK's Retrofit MultiShareList branch.
-The ordinary `share_detail` fragment also has a separate legacy-network Save
-branch with string-valued file IDs and a different common transport. Its
-guarded share-view handler reports received-link history through
-`POST /rest/receive/report`. Those additional UI branches are not implemented
-by the current metadata/registration/Retrofit-transfer workflow. Their effect
-on Webmaster acquisition credit has not been demonstrated.
+`ReportAndroidPostLoginAttribution` sends invite code only from a confirmed
+nonempty referrer result, and material fields only from an actually observed
+first-launch scene. Own UID/NDUS/SK and saved per-report outcomes bind those
+requests to the account. Media storage is separate from
+`RequestCommonParams.c()`'s process cache; the extracted getter was replayed
+offline. See [attribution state](ANDROID_ATTRIBUTION.md) for the exact fields.
 
-Native install-media storage and the process-cached common media value are
-also distinct. The SDK currently applies a confirmed first-launch media result
-immediately; exact APK cache timing needs an actual runtime observation.
+The Hy SendCode source follows the active page's `from=share`, independently of
+locally saved shared-link metadata. Callers may explicitly select that known UI
+entry branch. The native producer of this exact route has not been identified;
+a shared owner, `upload_log` and Play InstallReferrer are separate inputs.
 
 ## Three APK rand families
 

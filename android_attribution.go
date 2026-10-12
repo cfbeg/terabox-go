@@ -1,6 +1,7 @@
 package terabox
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -58,6 +59,20 @@ type AndroidAttributionCapture struct {
 	Click           *AndroidClickAttribution   `json:"click,omitempty"`
 	Install         *AndroidInstallAttribution `json:"install,omitempty"`
 	InstallReferrer *string                    `json:"install_referrer,omitempty"`
+	// NativeMediaCache is the observed RequestCommonParams static cache, not
+	// the similarly named MMKV installation value. Nil means unobserved.
+	NativeMediaCache  *AndroidNativeMediaCache `json:"native_media_cache,omitempty"`
+	StoredMediaSource *string                  `json:"stored_media_source,omitempty"`
+	// MaterialSourceScene is the actual AfSpreadHelperKt.c() result. It is
+	// never inferred from a share owner, campaign or arbitrary deeplink.
+	MaterialSourceScene *string `json:"material_source_scene,omitempty"`
+}
+
+// AndroidNativeMediaCache models RequestCommonParams.c(): only an uninitialized
+// static cache reads MMKV. Changing stored attribution does not clear it.
+type AndroidNativeMediaCache struct {
+	Initialized bool    `json:"initialized"`
+	Value       *string `json:"value,omitempty"`
 }
 
 // AndroidReferrerData contains the nullable server DTO fields unchanged. The
@@ -85,18 +100,27 @@ type AndroidAttributionReport struct {
 	Errno       *int            `json:"errno,omitempty"`
 	RequestID   string          `json:"request_id,omitempty"`
 	RawResponse json.RawMessage `json:"raw_response,omitempty"`
+	// RawBody retains a bounded byte prefix even for interrupted/non-JSON
+	// replies. It is private evidence, never a success or replay indication.
+	RawBody []byte `json:"raw_body,omitempty"`
 }
+
+const androidAttributionResponseLimit = 1 << 20
 
 // AndroidAttributionState is installation state, distinct from account and
 // Webmaster credit state. It is included in WebmasterRegistrationSession.
 type AndroidAttributionState struct {
-	Capture               AndroidAttributionCapture `json:"capture"`
-	ClickReport           AndroidAttributionReport  `json:"click_report"`
-	InstallReport         AndroidAttributionReport  `json:"install_report"`
-	ReferrerReport        AndroidAttributionReport  `json:"referrer_report"`
-	Referrer              *AndroidReferrerData      `json:"referrer,omitempty"`
-	AppInstallMediaSource *string                   `json:"app_install_media_source,omitempty"`
-	WebmasterUK           *int64                    `json:"tera_link_webmaster_uk,omitempty"`
+	Capture               AndroidAttributionCapture         `json:"capture"`
+	ClickReport           AndroidAttributionReport          `json:"click_report"`
+	InstallReport         AndroidAttributionReport          `json:"install_report"`
+	ReferrerReport        AndroidAttributionReport          `json:"referrer_report"`
+	Referrer              *AndroidReferrerData              `json:"referrer,omitempty"`
+	AppInstallMediaSource *string                           `json:"app_install_media_source,omitempty"`
+	WebmasterUK           *int64                            `json:"tera_link_webmaster_uk,omitempty"`
+	NativeMediaCache      *AndroidNativeMediaCache          `json:"native_media_cache,omitempty"`
+	AfCampaign            *string                           `json:"af_campaign,omitempty"`
+	DeepLinkValue         *string                           `json:"deep_link_value,omitempty"`
+	PostLogin             *AndroidPostLoginAttributionState `json:"post_login,omitempty"`
 }
 
 func cloneAndroidAttribution(state *AndroidAttributionState) *AndroidAttributionState {
@@ -127,6 +151,17 @@ func validateAndroidAttributionCapture(capture AndroidAttributionCapture, device
 	}
 	if capture.InstallReferrer != nil && !attributionStringValid(*capture.InstallReferrer) {
 		return errors.New("Play install referrer must be valid UTF-8 without control characters")
+	}
+	if capture.NativeMediaCache != nil {
+		if capture.NativeMediaCache.Initialized != (capture.NativeMediaCache.Value != nil) ||
+			(capture.NativeMediaCache.Value != nil && !attributionStringValid(*capture.NativeMediaCache.Value)) {
+			return errors.New("observed native media cache has inconsistent initialization/value")
+		}
+	}
+	for _, value := range []*string{capture.StoredMediaSource, capture.MaterialSourceScene} {
+		if value != nil && !attributionStringValid(*value) {
+			return errors.New("observed installation cache contains an invalid string")
+		}
 	}
 	if click := capture.Click; click != nil {
 		page, err := url.Parse(click.PageURL)
@@ -234,9 +269,13 @@ func validateAndroidAttributionState(state *AndroidAttributionState, profile And
 	if err := validateAndroidAttributionCapture(state.Capture, profile.DeviceID); err != nil {
 		return err
 	}
-	for _, report := range []AndroidAttributionReport{state.ClickReport, state.InstallReport, state.ReferrerReport} {
+	reports := []AndroidAttributionReport{state.ClickReport, state.InstallReport, state.ReferrerReport}
+	if state.PostLogin != nil {
+		reports = append(reports, state.PostLogin.InviteReport, state.PostLogin.MaterialReport)
+	}
+	for _, report := range reports {
 		if (report.Succeeded && (!report.Attempted || report.Errno == nil || *report.Errno != 0)) ||
-			(!report.Attempted && (report.HTTPStatus != 0 || report.Errno != nil || report.RequestID != "" || len(report.RawResponse) != 0)) {
+			(!report.Attempted && (report.HTTPStatus != 0 || report.Errno != nil || report.RequestID != "" || len(report.RawResponse) != 0 || len(report.RawBody) != 0)) {
 			return errors.New("saved attribution report has inconsistent attempt/result state")
 		}
 		if report.HTTPStatus < 0 || report.HTTPStatus > 599 || (report.HTTPStatus > 0 && report.HTTPStatus < 100) {
@@ -244,6 +283,23 @@ func validateAndroidAttributionState(state *AndroidAttributionState, profile And
 		}
 		if len(report.RawResponse) != 0 && !json.Valid(report.RawResponse) {
 			return errors.New("saved attribution response must be valid JSON")
+		}
+		if len(report.RawBody) > androidAttributionResponseLimit {
+			return errors.New("saved attribution wire bytes exceed the read limit")
+		}
+		if len(report.RawBody) != 0 && len(report.RawResponse) != 0 {
+			var bodyValue, responseValue any
+			decode := func(body []byte, target *any) error {
+				decoder := json.NewDecoder(bytes.NewReader(body))
+				decoder.UseNumber()
+				return decoder.Decode(target)
+			}
+			if !json.Valid(report.RawBody) || decode(report.RawBody, &bodyValue) != nil || decode(report.RawResponse, &responseValue) != nil || !reflect.DeepEqual(bodyValue, responseValue) {
+				return errors.New("saved attribution JSON does not match its original wire bytes")
+			}
+		}
+		if len(report.RawBody) != 0 && !json.Valid(report.RawBody) && (report.Succeeded || report.Errno != nil || report.RequestID != "") {
+			return errors.New("non-JSON attribution wire bytes cannot have confirmed envelope metadata")
 		}
 		if report.Succeeded && (report.HTTPStatus != http.StatusOK || len(report.RawResponse) == 0) {
 			return errors.New("confirmed attribution report requires its actual successful HTTP response")
@@ -273,18 +329,54 @@ func validateAndroidAttributionState(state *AndroidAttributionState, profile And
 			return errors.New("saved referrer data does not match its actual confirmed response")
 		}
 	}
-	if state.Referrer != nil && state.Capture.Install.IsFirstLaunch && state.AppInstallMediaSource == nil {
+	if state.Referrer != nil && (state.Capture.Install.IsFirstLaunch || state.NativeMediaCache != nil) && state.AppInstallMediaSource == nil {
 		return errors.New("saved first-launch result is missing its derived installation media source")
 	}
 	if state.AppInstallMediaSource != nil {
-		if state.Referrer == nil || state.Capture.Install == nil || !state.Capture.Install.IsFirstLaunch {
+		if state.Referrer == nil || state.Capture.Install == nil || (!state.Capture.Install.IsFirstLaunch && state.NativeMediaCache == nil) {
 			return errors.New("saved installation media source requires a confirmed first-launch result")
 		}
-		if *state.AppInstallMediaSource != androidReferrerMediaSource(state.Referrer) ||
+		if (state.NativeMediaCache == nil && (*state.AppInstallMediaSource != androidReferrerMediaSource(state.Referrer) ||
 			profile.NativeParams["af_media_source"] != *state.AppInstallMediaSource ||
-			profile.LegacyNativeParams["af_media_source"] != *state.AppInstallMediaSource {
+			profile.LegacyNativeParams["af_media_source"] != *state.AppInstallMediaSource)) ||
+			(state.NativeMediaCache != nil && *state.AppInstallMediaSource != androidReferrerMediaSource(state.Referrer)) {
 			return errors.New("saved installation media source does not match its result/profile")
 		}
+	}
+	if state.NativeMediaCache != nil {
+		cache := state.NativeMediaCache
+		if cache.Initialized != (cache.Value != nil) || (cache.Value != nil && !attributionStringValid(*cache.Value)) {
+			return errors.New("saved native media cache has inconsistent initialization/value")
+		}
+		// A durable pre-request checkpoint marks an uncertain attempt before
+		// native common construction has initialized its static cache. That
+		// snapshot must remain restorable while retaining the replay guard.
+		for _, report := range []AndroidAttributionReport{state.InstallReport, state.ReferrerReport} {
+			observed := report.Succeeded || report.HTTPStatus != 0 || report.Errno != nil || report.RequestID != "" || len(report.RawResponse) != 0 || len(report.RawBody) != 0
+			if observed && !cache.Initialized {
+				return errors.New("observed native report response requires its initialized process media cache")
+			}
+		}
+		if cache.Initialized && (profile.NativeParams["af_media_source"] != *cache.Value || profile.LegacyNativeParams["af_media_source"] != *cache.Value) {
+			return errors.New("saved native media cache does not match effective profile values")
+		}
+		if captured := state.Capture.NativeMediaCache; captured != nil && captured.Initialized && !reflect.DeepEqual(captured, cache) {
+			return errors.New("saved native media cache changed its actually observed initialized value")
+		}
+		if state.Referrer != nil &&
+			(state.AppInstallMediaSource == nil || *state.AppInstallMediaSource != androidReferrerMediaSource(state.Referrer) ||
+				!reflect.DeepEqual(state.AfCampaign, state.Referrer.Campaign) || !reflect.DeepEqual(state.DeepLinkValue, state.Referrer.DeepLinkValue)) {
+			return errors.New("saved first-launch MMKV attribution does not match actual response")
+		}
+	}
+	if state.AfCampaign != nil || state.DeepLinkValue != nil {
+		if state.Referrer == nil || state.Capture.Install == nil ||
+			!reflect.DeepEqual(state.AfCampaign, state.Referrer.Campaign) || !reflect.DeepEqual(state.DeepLinkValue, state.Referrer.DeepLinkValue) {
+			return errors.New("saved campaign/material cache requires its actual first-launch referrer response")
+		}
+	}
+	if err := validateAndroidPostLoginAttribution(state, profile); err != nil {
+		return err
 	}
 	if state.WebmasterUK != nil {
 		if state.Referrer == nil || state.Capture.Install == nil || !state.Capture.Install.IsFirstLaunch || state.Referrer.DeepLink == nil {
@@ -372,6 +464,14 @@ func (c *Client) SetAndroidAttributionCapture(capture AndroidAttributionCapture)
 	if err := validateAndroidAttributionCapture(capture, profile.DeviceID); err != nil {
 		return wrapErr(op, err)
 	}
+	cache := androidObservedMediaCache(capture, *profile)
+	if cache.Initialized {
+		for _, params := range []map[string]string{profile.NativeParams, profile.LegacyNativeParams} {
+			if observed, ok := params["af_media_source"]; ok && observed != *cache.Value {
+				return wrapErr(op, errors.New("observed native media cache conflicts with effective profile"))
+			}
+		}
+	}
 	c.attributionMu.Lock()
 	defer c.attributionMu.Unlock()
 	c.mu.Lock()
@@ -380,6 +480,10 @@ func (c *Client) SetAndroidAttributionCapture(capture AndroidAttributionCapture)
 		return wrapErr(op, errors.New("installation already has an attribution capture"))
 	}
 	c.androidAttribution = cloneAndroidAttribution(&AndroidAttributionState{Capture: capture})
+	c.androidAttribution.NativeMediaCache = cache
+	if cache.Initialized {
+		applyAttributionMedia(&c.androidApp.profile, *cache.Value)
+	}
 	return nil
 }
 
@@ -403,6 +507,9 @@ func (c *Client) RestoreAndroidAttribution(state *AndroidAttributionState) error
 	}
 	normalized := cloneAndroidAttribution(state)
 	profile := c.AndroidAppProfile()
+	if normalized.NativeMediaCache == nil && normalized.Capture.NativeMediaCache != nil {
+		normalized.NativeMediaCache = androidObservedMediaCache(normalized.Capture, *profile)
+	}
 	if normalized.ReferrerReport.Succeeded {
 		referrer, err := attributionReferrerFromRaw(normalized.ReferrerReport.RawResponse)
 		if err != nil {
@@ -412,16 +519,40 @@ func (c *Client) RestoreAndroidAttribution(state *AndroidAttributionState) error
 			return wrapErr(op, errors.New("imported referrer conflicts with its actual response"))
 		}
 		normalized.Referrer = referrer
-		if normalized.Capture.Install != nil && normalized.Capture.Install.IsFirstLaunch {
+		if normalized.Capture.Install != nil && (normalized.Capture.Install.IsFirstLaunch || normalized.NativeMediaCache != nil) {
 			mediaSource := androidReferrerMediaSource(referrer)
-			owner := attributionWebmasterUK(referrer)
+			var owner *int64
+			if normalized.Capture.Install.IsFirstLaunch {
+				owner = attributionWebmasterUK(referrer)
+			}
 			if (normalized.AppInstallMediaSource != nil && *normalized.AppInstallMediaSource != mediaSource) ||
 				(normalized.WebmasterUK != nil && !reflect.DeepEqual(normalized.WebmasterUK, owner)) {
 				return wrapErr(op, errors.New("imported installation attribution conflicts with its actual response"))
 			}
-			normalized.AppInstallMediaSource, normalized.WebmasterUK = &mediaSource, owner
-			applyAttributionMedia(profile, mediaSource)
+			if (normalized.AfCampaign != nil && !reflect.DeepEqual(normalized.AfCampaign, referrer.Campaign)) ||
+				(normalized.DeepLinkValue != nil && !reflect.DeepEqual(normalized.DeepLinkValue, referrer.DeepLinkValue)) {
+				return wrapErr(op, errors.New("imported campaign/material cache conflicts with its actual response"))
+			}
+			normalized.WebmasterUK = owner
+			if normalized.NativeMediaCache == nil && normalized.Capture.NativeMediaCache == nil {
+				// Keep legacy imported/session semantics reviewable. New captures
+				// include the separate process cache and never force a refresh.
+				normalized.AppInstallMediaSource = &mediaSource
+				applyAttributionMedia(profile, mediaSource)
+			} else {
+				if normalized.NativeMediaCache == nil {
+					normalized.NativeMediaCache = androidObservedMediaCache(normalized.Capture, *profile)
+				}
+				normalized.AppInstallMediaSource = &mediaSource
+				normalized.AfCampaign, normalized.DeepLinkValue = referrer.Campaign, referrer.DeepLinkValue
+			}
 		}
+	}
+	if normalized.NativeMediaCache == nil && normalized.Capture.NativeMediaCache != nil {
+		normalized.NativeMediaCache = androidObservedMediaCache(normalized.Capture, *profile)
+	}
+	if normalized.NativeMediaCache != nil && normalized.NativeMediaCache.Initialized {
+		applyAttributionMedia(profile, *normalized.NativeMediaCache.Value)
 	}
 	if err := validateAndroidAttributionState(normalized, *profile); err != nil {
 		return wrapErr(op, err)
@@ -469,6 +600,10 @@ func (c *Client) attributionReportLocked(operation string) *AndroidAttributionRe
 		return &c.androidAttribution.ClickReport
 	case "install":
 		return &c.androidAttribution.InstallReport
+	case "invite":
+		return &c.androidAttribution.PostLogin.InviteReport
+	case "material":
+		return &c.androidAttribution.PostLogin.MaterialReport
 	default:
 		return &c.androidAttribution.ReferrerReport
 	}
@@ -501,17 +636,17 @@ func (c *Client) attributionRequest(ctx context.Context, operation string, optio
 	c.mu.Lock()
 	c.attributionReportLocked(operation).HTTPStatus = resp.StatusCode
 	c.mu.Unlock()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
-	if err != nil {
-		return nil, wrapErr(op, err)
-	}
-	if len(body) > 1<<20 {
-		return nil, wrapErr(op, errors.New("attribution response exceeds 1 MiB"))
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, androidAttributionResponseLimit+1))
+	oversized := len(body) > androidAttributionResponseLimit
+	if oversized {
+		body = body[:androidAttributionResponseLimit]
 	}
 	var envelope androidAttributionEnvelope
 	decodeErr := json.Unmarshal(body, &envelope)
 	c.mu.Lock()
 	report := c.attributionReportLocked(operation)
+	report.RawBody = append([]byte(nil), body...)
+	report.RawResponse, report.Errno, report.RequestID = nil, nil, ""
 	if json.Valid(body) {
 		report.RawResponse = append(json.RawMessage(nil), body...)
 	}
@@ -520,6 +655,9 @@ func (c *Client) attributionRequest(ctx context.Context, operation string, optio
 		report.RequestID = attributionRequestID(envelope.RequestID)
 	}
 	c.mu.Unlock()
+	if readErr != nil || oversized {
+		return nil, wrapErr(op, errors.New("attribution response is incomplete or exceeds its read limit"))
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, wrapErr(op, &httpStatusError{StatusCode: resp.StatusCode})
 	}
@@ -649,8 +787,9 @@ func (c *Client) ReportAndroidInstall(ctx context.Context) error {
 
 // QueryAndroidInstallReferrer sends the exact Play referrer when available. A
 // nil referrer omits referer_data, matching the APK's timeout/unavailable path.
-// Successful nonnull data is cached; first-launch attribution supplies native
-// af_media_source and the local Webmaster UK parsed only from returned deeplink.
+// Successful nonnull data is cached; first launch stores MMKV media/campaign and
+// the local Webmaster UK parsed only from returned deeplink. The initialized
+// RequestCommonParams media cache stays unchanged for subsequent native calls.
 func (c *Client) QueryAndroidInstallReferrer(ctx context.Context) (*AndroidReferrerData, error) {
 	const op = "queryAndroidInstallReferrer"
 	if err := c.requireAndroidApp(); err != nil {
@@ -685,10 +824,10 @@ func (c *Client) QueryAndroidInstallReferrer(ctx context.Context) (*AndroidRefer
 	c.mu.Lock()
 	c.androidAttribution.ReferrerReport.Succeeded = true
 	c.androidAttribution.Referrer = referrer
+	mediaSource := androidReferrerMediaSource(referrer)
+	c.androidAttribution.AppInstallMediaSource = &mediaSource
+	c.androidAttribution.AfCampaign, c.androidAttribution.DeepLinkValue = referrer.Campaign, referrer.DeepLinkValue
 	if state.Capture.Install.IsFirstLaunch {
-		mediaSource := androidReferrerMediaSource(referrer)
-		c.androidAttribution.AppInstallMediaSource = &mediaSource
-		applyAttributionMedia(&c.androidApp.profile, mediaSource)
 		c.androidAttribution.WebmasterUK = attributionWebmasterUK(referrer)
 	}
 	result := cloneAndroidAttribution(c.androidAttribution).Referrer

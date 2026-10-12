@@ -40,13 +40,15 @@ SDK は APK 4.26.5 が使う Hy WebView 登録と native 共有 API を実装す
 | --- | --- | --- |
 | 1 | `NewAndroidAppClient(profile)` | B 専用の捕捉済みプロフィール、初期 Session 保存 |
 | 2 | `PrepareWebmasterReferral(ctx,url)` | Go エラーなし、共有 ID・共有主・対象ファイルの一致 |
+| 2a | `ReportShareView` | 通常共有画面の表示通知。失敗も保存し、独立した登録 UI は継続 |
 | 3 | メール inbox 準備 | サービスから確認メールを送る前に受信先を準備 |
 | 4 | `RegisterSendCode` | Go エラーなし、Code=0、Errno=0、非空 Token、Session 保存 |
 | 5 | OTP 待ち→`RegisterVerify` | 同じ Client/Token、Code=0、Errno=0 |
 | 6 | Finish 送出前の永続記録 | 「Finish 実行中」をディスクへ保存してから送出 |
 | 7 | `RegisterFinish` | 返却結果と Session をエラー処理より先に保存 |
 | 8 | `RefreshAndroidAppConfig` | 登録済み成果を保持し、取得成功または未取得状態を保存 |
-| 9 | 任意の `TransferWebmasterReferral` | 明示選択 FSID、受付結果と Session を保存 |
+| 8a | `ReportAndroidPostLoginAttribution` | 実測の返却 invite code / 初回 material scene がある場合だけ報告 |
+| 9 | 任意の `TransferWebmasterReferral` | 通常画面は `Route: ShareTransferRouteShareDetailLegacy`、明示選択 FSID、受付結果と Session を保存 |
 | 10 | 保存と A の計上の確認 | 下記の各結果を別々に確認 |
 
 Hy page の PCF・cookie、Android passport form、native psign、RSA password、
@@ -69,8 +71,14 @@ Hy の画面遷移に従って確認・完了時の active URL／Referer／chann
 確認コードの待ち時間を一つの短いネットワーク期限へまとめない。各通信に期限を設け、
 OTP 待ちはその専用期限を使う。captcha 応答の RequestID と捕捉済み Hy page を保存し、
 同じアプリフローで確認を続ける。SDK の challenge error は RequestID を持つが、
-creator の送信・確認失敗の checkpoint はその応答全体を保存する実装にはなっていない。
+creator の checkpoint は送信・確認・Finish の応答と原始の bounded byte を保存する。
+実際に完了した challenge の入力は `SetAndroidChallengeIdentity` で保存済みの RequestID と
+対象 path に結び付け、別のリクエストへ使い回さない。
 画面 URL だけで元の拒否されたリクエストの復旧を判断しない。
+
+動的 Hy bootstrap/FSEC は実ページの source と依存を制限付き Go runtime で実行する。
+実測していない DOM/fingerprint/ESM 依存は停止する。現行の実登録では FSEC-active を
+観測していないため、その条件の実通信検証とは区別する。
 
 ## 保存・復旧
 
@@ -87,6 +95,8 @@ Finish 状態を含む。捕捉した同じ identity の fresh な `NewAndroidAp
 
 `newcopy` の再送は別コピーを作る可能性がある。SDK の task_id は受付を表す。
 保存完了は B のアプリのファイル一覧で対象ファイル・サイズ・保存先を確認する。
+Go からは `QueryShareTransferTask` で既存の非同期 task を確認し、`ListFiles` で保存先を照合する。
+同期 `info[]` は task を返さないことがあるため、受信結果に従って確認する。
 保存数を New Users の代わりに数えない。
 
 ## A 側の計上確認

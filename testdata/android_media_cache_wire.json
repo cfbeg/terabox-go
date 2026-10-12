@@ -1,0 +1,37 @@
+{
+  "dex": "classes12.dex",
+  "dex_sha256": "f62907ba7ebbb6328f1d0510a29b591f12cf3c5a95591de8c966a33d2a332497",
+  "code_offset": "0xcf181c",
+  "class": "Lcom/dubox/drive/kernel/architecture/net/RequestCommonParams;",
+  "method": "c",
+  "cases": [
+    {
+      "initial_cache": null,
+      "stored_before": null,
+      "stored_after": "returned-media",
+      "first_native_value": "Undefined",
+      "later_native_value": "Undefined"
+    },
+    {
+      "initial_cache": "observed-cached",
+      "stored_before": "older-store",
+      "stored_after": "returned-media",
+      "first_native_value": "observed-cached",
+      "later_native_value": "observed-cached"
+    },
+    {
+      "initial_cache": null,
+      "stored_before": "",
+      "stored_after": "returned-media",
+      "first_native_value": "",
+      "later_native_value": ""
+    },
+    {
+      "initial_cache": null,
+      "stored_before": "returned-media",
+      "stored_after": "returned-media",
+      "first_native_value": "returned-media",
+      "later_native_value": "returned-media"
+    }
+  ]
+}

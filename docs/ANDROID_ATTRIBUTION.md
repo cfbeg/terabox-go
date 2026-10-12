@@ -15,7 +15,8 @@ new random profile.
 ## Inputs and requests
 
 `AndroidAttributionCapture` contains `device_id`, optional `click`, optional
-`install`, and optional `install_referrer`. `SetAndroidAttributionCapture`
+`install`, optional `install_referrer`, and optional observed native cache/scene
+fields. `SetAndroidAttributionCapture`
 validates and copies those inputs without network activity. No share owner,
 share ID, or shared URL is converted into an install referrer, invite code, or
 ReportUser `bind_uid`.
@@ -25,6 +26,7 @@ ReportUser `bind_uid`.
 | `ReportAndroidShareClick` | POST `/api/srn/ck`, captured common query plus form body | Public share-page app-open event |
 | `ReportAndroidInstall` | POST `/api/srn/ins`, endpoint query parameters, empty body | Android package/install and first-launch state |
 | `QueryAndroidInstallReferrer` | POST `/api/srn/ref`, same query plus optional `referer_data`, empty body | Actual Play `getInstallReferrer()` value or unavailable callback |
+| `ReportAndroidPostLoginAttribution` | GET `/api/activity/invite/v1/reportinvite`; POST `/newmain/reporter/userattribute`, query fields and empty body | Confirmed returned invite code; actual first-launch material scene |
 
 The click form contains the verified constants `pid=tera_sharelink` and
 `pdetail=header_button`, plus captured `c` (the full `page_url`), `tera_link_id`,
@@ -68,18 +70,37 @@ with an explicit zero errno and nonnull object `data`. Its nullable
 in the raw JSON. The response's attribution `status` is not interpreted as an
 API success code.
 
-On an explicit first launch, the confirmed response supplies
-`app_install_media_source` and both native/legacy `af_media_source` query maps.
-The APK's null/blank media-source cache transformation uses the literal string
-`null`; the original nullable server field remains intact. A valid returned
-deeplink `uk` is saved as local `tera_link_webmaster_uk`. It is not assigned to
-the account UID, ReportUser, or invite report. Later-launch results are saved
-without replacing the installation's original media cache.
+The confirmed response saves `app_install_media_source`, `af_campaign`, and
+`deep_link_value` separately from effective native common parameters. APK
+`aw.q.k` normalizes null/blank media to the literal string `null`; the original
+nullable server field remains intact. `aw.b.t` stores chosen media and genuine
+returned nonempty code on later launches too: its first-launch branch skips
+only the earlier scene/analytics code, then rejoins before these writes.
+A valid returned deeplink `uk` is saved as local `tera_link_webmaster_uk` only
+on first launch. It is not assigned to account UID, ReportUser or invite code.
+
+`RequestCommonParams.c()` reads MMKV media only while its static process cache
+is uninitialized. It does not reread after the attribution callback stores new
+media. New capture state records `native_media_cache: {initialized, value}`;
+the actually observed wire value initializes that cache. `stored_media_source`
+can separately capture pre-report MMKV. An explicitly uninitialized cache reads
+this stored value (default `Undefined`) on the first native request. Both native
+and legacy query maps retain the effective cached value for the saved process.
+Existing sessions without this cache field retain their prior semantics.
+
+The post-login method sends an invite report only for the actual nonempty
+`ReferrerData.code`, never a share owner or share ID. Material reporting requires
+the real local first-launch flag and observed `material_source_scene`, the value
+of `AfSpreadHelperKt.c()`. It reproduces APK scene mappings and `fb_` handling;
+absent or blank scenes produce no material request. Eligible requests require
+the account's own UID/NDUS/SK. Invite and material outcomes are stored separately
+in `post_login`, including raw responses, and are not Webmaster credit receipts.
 
 `RestoreAndroidAttribution` imports already observed reports on a fresh client
 with the same installation identity. A claimed success requires the actual
 HTTP 200 response, explicit errno zero, and matching raw metadata. It derives
-missing referrer/cache fields from that response and updates a copied profile
+missing stored referrer fields from that response and preserves the observed
+effective process media cache in a copied profile
 without HTTP. Unknown or failed attempts remain attempted and block automatic
 replay. Successful reports return their saved outcome without another request.
 Regular session restore requires a complete, internally consistent saved
@@ -98,3 +119,9 @@ The contracts come from the supplied APK SHA-256
 consumers, and the public shared-page modules `1f03`, `35d0`, and `7404`.
 Click wire replay executes those actual bundled functions offline. This does
 not establish the service's Webmaster credit eligibility rules.
+
+Additional verified offsets: `RequestCommonParams.c` `0xcf181c`, `aw.b.t`
+`0xa4b740`, `aw.q.k` `0xa4d1f0`, `aw.e.___` `0xa4c634`, `aw.e.____`
+`0xa4c880`, `InviteCodeChecker.f` `0xc9ee7c`. The media getter was replayed
+offline from its extracted DEX instructions, including changes to stored MMKV
+after initialization. Its cached wire value remained unchanged in four cases.

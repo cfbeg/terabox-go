@@ -117,17 +117,21 @@ func (c *Client) PrepareWebmasterReferralWithOptions(ctx context.Context, shareU
 // the email verification step or a transfer retry. It contains credentials;
 // passwords and verification codes are never included.
 type WebmasterRegistrationSession struct {
-	Referral              WebmasterReferral        `json:"referral"`
-	Cookies               string                   `json:"cookies"`
-	WebHost               string                   `json:"web_host"`
-	RegistrationToken     string                   `json:"registration_token,omitempty"`
-	NDUS                  string                   `json:"ndus,omitempty"`
-	PCFToken              string                   `json:"pcf_token,omitempty"`
-	HyJSToken             string                   `json:"hy_js_token,omitempty"`
-	RegistrationConfirmed bool                     `json:"registration_confirmed"`
-	FinishAttempted       bool                     `json:"finish_attempted"`
-	AndroidApp            *AndroidAppProfile       `json:"android_app,omitempty"`
-	AndroidAttribution    *AndroidAttributionState `json:"android_attribution,omitempty"`
+	Referral              WebmasterReferral         `json:"referral"`
+	Cookies               string                    `json:"cookies"`
+	WebHost               string                    `json:"web_host"`
+	RegistrationToken     string                    `json:"registration_token,omitempty"`
+	NDUS                  string                    `json:"ndus,omitempty"`
+	PCFToken              string                    `json:"pcf_token,omitempty"`
+	HyJSToken             string                    `json:"hy_js_token,omitempty"`
+	HyRuntime             *AndroidHyRuntimeSnapshot `json:"hy_runtime,omitempty"`
+	HyRuntimeJSToken      string                    `json:"hy_runtime_js_token,omitempty"`
+	PendingChallenge      *AndroidPassportChallenge `json:"pending_challenge,omitempty"`
+	ChallengeIdentity     *AndroidChallengeIdentity `json:"challenge_identity,omitempty"`
+	RegistrationConfirmed bool                      `json:"registration_confirmed"`
+	FinishAttempted       bool                      `json:"finish_attempted"`
+	AndroidApp            *AndroidAppProfile        `json:"android_app,omitempty"`
+	AndroidAttribution    *AndroidAttributionState  `json:"android_attribution,omitempty"`
 }
 
 // WebmasterRegistrationSession returns a serializable app snapshot, including
@@ -150,6 +154,12 @@ func (c *Client) WebmasterRegistrationSession() *WebmasterRegistrationSession {
 	}
 	profile := copyAndroidAppProfile(c.androidApp.profile)
 	result.AndroidApp = &profile
+	if c.androidApp.hyRuntime != nil {
+		result.HyRuntime = c.androidApp.hyRuntime.snapshot()
+		result.HyRuntimeJSToken = c.androidApp.runtimeJSToken
+	}
+	result.PendingChallenge = cloneAndroidPassportChallenge(c.data.pendingChallenge)
+	result.ChallengeIdentity = cloneAndroidChallengeIdentity(c.data.challengeIdentity)
 	result.AndroidAttribution = cloneAndroidAttribution(c.androidAttribution)
 	return result
 }
@@ -208,6 +218,16 @@ func (c *Client) RestoreWebmasterRegistrationSession(saved *WebmasterRegistratio
 	if saved.RegistrationConfirmed && saved.NDUS == "" {
 		return wrapErr(op, errors.New("confirmed registration is missing its session cookie"))
 	}
+	if err := validateAndroidChallengeSnapshot(saved.PendingChallenge, saved.ChallengeIdentity); err != nil {
+		return wrapErr(op, err)
+	}
+	runtime, err := restoreAndroidHyRuntime(context.Background(), saved.HyRuntime, restored.androidApp.profile, saved.PCFToken, saved.HyRuntimeJSToken)
+	if err != nil {
+		return wrapErr(op, err)
+	}
+	if saved.HyRuntime != nil && saved.NDUS == "" && saved.HyJSToken != saved.HyRuntimeJSToken {
+		return wrapErr(op, errors.New("saved Hy runtime token does not match its active page"))
+	}
 	if err := validateAndroidAttributionState(saved.AndroidAttribution, restored.androidApp.profile); err != nil {
 		return wrapErr(op, err)
 	}
@@ -237,9 +257,11 @@ func (c *Client) RestoreWebmasterRegistrationSession(saved *WebmasterRegistratio
 	c.registrationNDUS = saved.NDUS
 	c.registrationConfirmed = saved.RegistrationConfirmed
 	c.registrationFinished = saved.FinishAttempted || saved.NDUS != ""
-	c.data = appData{pcfToken: saved.PCFToken, jsToken: saved.HyJSToken}
+	c.data = appData{pcfToken: saved.PCFToken, jsToken: saved.HyJSToken,
+		pendingChallenge: cloneAndroidPassportChallenge(saved.PendingChallenge), challengeIdentity: cloneAndroidChallengeIdentity(saved.ChallengeIdentity)}
 	c.params = accountParams{}
 	c.androidApp = restored.androidApp
+	c.androidApp.hyRuntime, c.androidApp.runtimeJSToken = runtime, saved.HyRuntimeJSToken
 	c.androidAttribution = cloneAndroidAttribution(saved.AndroidAttribution)
 	c.androidApp.ready = saved.PCFToken != "" && c.androidApp.profile.PSign != ""
 	c.userAgent, c.lang = c.androidApp.profile.UserAgent, c.androidApp.profile.Language
@@ -248,8 +270,8 @@ func (c *Client) RestoreWebmasterRegistrationSession(saved *WebmasterRegistratio
 
 // registrationSource follows the APK Hy screen's SendCode source field.
 func (c *Client) registrationSource(form *formValues) {
-	ref := c.WebmasterReferral()
-	if ref != nil {
+	page, _ := url.Parse(c.AndroidAppProfile().PageURL)
+	if page.Query().Get("from") == "share" {
 		form.Append("reg_source", "share")
 	}
 }
@@ -294,6 +316,8 @@ type WebmasterTransferOptions struct {
 	FSIDs       []int64
 	Destination string
 	OnDup       string
+	Route       ShareTransferRoute
+	SEKey       string
 }
 
 // WebmasterRegistrationResult keeps registration and transfer outcomes
@@ -351,7 +375,7 @@ func validateWebmasterTransferOptions(opts *WebmasterTransferOptions) error {
 	if opts == nil || len(opts.FSIDs) == 0 {
 		return errors.New("select shared file IDs before finishing registration")
 	}
-	_, err := validateShareTransfer(opts.FSIDs, opts.Destination, &ShareTransferOptions{OnDup: opts.OnDup})
+	_, err := validateShareTransfer(opts.FSIDs, opts.Destination, &ShareTransferOptions{OnDup: opts.OnDup, Route: opts.Route, SEKey: opts.SEKey})
 	return err
 }
 
@@ -386,12 +410,15 @@ func (c *Client) TransferWebmasterReferral(ctx context.Context, opts *WebmasterT
 			return nil, wrapErr(op, errors.New("registration session could not be confirmed"))
 		}
 		c.mu.Lock()
-		c.registrationConfirmed = true
+		// CheckLogin confirms that the observed NDUS is valid. Its numeric UK
+		// does not establish the distinct native registration UID. A missing
+		// UID must remain an unconfirmed, restorable registration snapshot.
+		c.registrationConfirmed = c.androidApp.profile.UID != ""
 		c.mu.Unlock()
 	}
-	transfer, err := c.TransferShare(ctx, ref.ShareID, ref.WebmasterUK, opts.FSIDs, opts.Destination, &ShareTransferOptions{OnDup: opts.OnDup})
+	transfer, err := c.TransferShare(ctx, ref.ShareID, ref.WebmasterUK, opts.FSIDs, opts.Destination, &ShareTransferOptions{OnDup: opts.OnDup, Route: opts.Route, SEKey: opts.SEKey})
 	if err != nil {
-		return nil, wrapErr(op, err)
+		return transfer, wrapErr(op, err)
 	}
 	if transfer.Errno != 0 {
 		return transfer, wrapErr(op, &APIError{Code: transfer.Errno, Message: transfer.ErrMsg})

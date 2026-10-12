@@ -114,8 +114,8 @@ func TestAndroidAttributionCapturedWireAndMediaPropagation(t *testing.T) {
 			}
 			return shareJSONResponse(req, `{"errno":0,"request_id":"ref-request","data":{"mediaSource":"server-source","status":"Non-organic","agency":null,"campaign":"server-campaign","code":"actual-server-code","adSet":"server-ad","opSource":"returned","deepLinkValue":"returned-value","deeplink":"dubox://share_detail?uk=789&shareid=999","future":{"kept":true}}}`), nil
 		case "/api/shorturlinfo":
-			if q.Get("af_media_source") != "server-source" {
-				t.Error("legacy native request did not use returned first-launch media source")
+			if q.Get("af_media_source") != "Undefined" {
+				t.Error("legacy native request overwrote the APK process media cache")
 			}
 			return shareJSONResponse(req, `{"errno":0,"shareid":456,"uk":123,"list":[]}`), nil
 		default:
@@ -141,7 +141,7 @@ func TestAndroidAttributionCapturedWireAndMediaPropagation(t *testing.T) {
 		t.Fatal("server attribution/raw response/derived installation state was not preserved")
 	}
 	profile := client.AndroidAppProfile()
-	if profile.NativeParams["af_media_source"] != "server-source" || profile.LegacyNativeParams["af_media_source"] != "server-source" || profile.ReportParams["bind_uid"] != "" {
+	if profile.NativeParams["af_media_source"] != "Undefined" || profile.LegacyNativeParams["af_media_source"] != "Undefined" || profile.ReportParams["bind_uid"] != "" {
 		t.Fatal("media propagation or owner/bind separation failed")
 	}
 	if _, err := client.GetShareInfo(ctx, "observed"); err != nil {
@@ -203,8 +203,8 @@ func TestAndroidAttributionNullableReferrerAndFirstLaunchCache(t *testing.T) {
 		data        string
 		wantMedia   string
 	}{
-		{"unavailable omitted", nil, true, `{"mediaSource":null,"deeplink":"dubox://share_detail?uk=-1"}`, "null"},
-		{"actual empty retained", attributionText(""), true, `{"mediaSource":"  "}`, "null"},
+		{"unavailable omitted", nil, true, `{"mediaSource":null,"deeplink":"dubox://share_detail?uk=-1"}`, "Undefined"},
+		{"actual empty retained", attributionText(""), true, `{"mediaSource":"  "}`, "Undefined"},
 		{"later launch retains existing install cache", attributionText("actual"), false, `{"mediaSource":"new-observation","deeplink":"dubox://share_detail?uk=123"}`, "Undefined"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -235,11 +235,18 @@ func TestAndroidAttributionNullableReferrerAndFirstLaunchCache(t *testing.T) {
 			}
 			state := client.AndroidAttribution()
 			if client.AndroidAppProfile().NativeParams["af_media_source"] != test.wantMedia ||
-				(!test.firstLaunch && (state.WebmasterUK != nil || state.AppInstallMediaSource != nil)) {
+				(!test.firstLaunch && state.WebmasterUK != nil) || state.AppInstallMediaSource == nil {
 				t.Fatal("first-launch-only cache updates were not respected")
 			}
 			if !test.firstLaunch && (state.Referrer.MediaSource == nil || *state.Referrer.MediaSource != "new-observation") {
 				t.Fatal("later-launch raw attribution result was lost")
+			}
+			wantStored := "null"
+			if !test.firstLaunch {
+				wantStored = "new-observation"
+			}
+			if *state.AppInstallMediaSource != wantStored {
+				t.Fatal("chosen referrer MMKV media was not normalized/preserved independently of process cache")
 			}
 		})
 	}
@@ -465,5 +472,142 @@ func TestAndroidAttributionCaptureBindingAndSessionValidation(t *testing.T) {
 		if err := restored.RestoreWebmasterRegistrationSession(saved); err == nil || restored.AndroidAttribution() != nil {
 			t.Fatal("invalid saved attribution accepted or restore mutated the client on failure")
 		}
+	}
+}
+
+func TestAndroidAttributionPreRequestUnknownMediaCacheCheckpointRestores(t *testing.T) {
+	profile := androidFixtureProfile()
+	profile.NativeParams, profile.LegacyNativeParams = nil, nil
+	client, err := NewAndroidAppClient(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capture := attributionFixtureCapture(profile)
+	capture.NativeMediaCache = &AndroidNativeMediaCache{Initialized: false}
+	if err = client.SetAndroidAttributionCapture(capture); err != nil {
+		t.Fatal(err)
+	}
+	saved := client.WebmasterRegistrationSession()
+	saved.AndroidAttribution.InstallReport.Attempted = true
+	requests := 0
+	restored, _ := NewAndroidAppClient(profile, WithHTTPClient(&http.Client{Transport: shareRoundTripFunc(func(*http.Request) (*http.Response, error) { requests++; return nil, errors.New("unexpected replay") })}))
+	if err = restored.RestoreWebmasterRegistrationSession(saved); err != nil {
+		t.Fatal("pre-send uncertain checkpoint could not restore", err)
+	}
+	if err = restored.ReportAndroidInstall(context.Background()); err == nil || requests != 0 {
+		t.Fatal("restored uncertain pre-send report was replayed")
+	}
+	if restored.AndroidAttribution().NativeMediaCache.Initialized {
+		t.Fatal("restoration invented an initialized cache")
+	}
+	zero := 0
+	saved.AndroidAttribution.InstallReport = AndroidAttributionReport{Attempted: true, Succeeded: true, HTTPStatus: 200, Errno: &zero, RawResponse: json.RawMessage(`{"errno":0}`)}
+	fresh, _ := NewAndroidAppClient(profile)
+	if err = fresh.RestoreWebmasterRegistrationSession(saved); err == nil {
+		t.Fatal("confirmed native response accepted an uninitialized process cache")
+	}
+}
+
+type attributionInterruptedReader struct{ body []byte }
+
+func (r *attributionInterruptedReader) Read(p []byte) (int, error) {
+	if len(r.body) == 0 {
+		return 0, io.ErrUnexpectedEOF
+	}
+	n := copy(p, r.body)
+	r.body = r.body[n:]
+	if len(r.body) == 0 {
+		return n, io.ErrUnexpectedEOF
+	}
+	return n, nil
+}
+
+func TestAndroidAttributionInterruptedAndNonJSONBytesSurviveRestore(t *testing.T) {
+	for _, test := range []struct {
+		name, body  string
+		interrupted bool
+		wantJSON    bool
+	}{
+		{"interrupted non-JSON", `{"errno":0,"data":`, true, false},
+		{"interrupted complete JSON remains unconfirmed", `{"errno":0,"request_id":9007199254740993,"data":{"mediaSource":"observed<&>"}}`, true, true},
+		{"HTML rejection", `<html>synthetic private failure</html>`, false, false},
+		{"oversized response retains bounded prefix", `{"errno":0,"data":{"mediaSource":"observed"}}` + strings.Repeat(" ", androidAttributionResponseLimit), false, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			requests := 0
+			transport := shareRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+				requests++
+				var reader io.Reader = strings.NewReader(test.body)
+				if test.interrupted {
+					reader = &attributionInterruptedReader{body: []byte(test.body)}
+				}
+				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(reader), Request: req}, nil
+			})
+			client := attributionFixtureClient(t, transport)
+			if _, err := client.QueryAndroidInstallReferrer(context.Background()); err == nil {
+				t.Fatal("incomplete/non-JSON/oversized response claimed success")
+			}
+			wantBody := []byte(test.body)
+			if len(wantBody) > androidAttributionResponseLimit {
+				wantBody = wantBody[:androidAttributionResponseLimit]
+			}
+			state := client.AndroidAttribution()
+			report := state.ReferrerReport
+			if !report.Attempted || report.Succeeded || report.HTTPStatus != 200 || !reflect.DeepEqual(report.RawBody, wantBody) || state.Referrer != nil || state.AppInstallMediaSource != nil {
+				t.Fatal("failed report lost bounded wire bytes or claimed returned attribution")
+			}
+			if json.Valid(report.RawResponse) != test.wantJSON {
+				t.Fatal("raw JSON preservation did not match actual bounded wire bytes")
+			}
+			for repeat := 0; repeat < 3; repeat++ {
+				encoded, err := json.Marshal(client.WebmasterRegistrationSession())
+				if err != nil {
+					t.Fatal("non-JSON bytes corrupted saved session", err)
+				}
+				var saved WebmasterRegistrationSession
+				if err = json.Unmarshal(encoded, &saved); err != nil {
+					t.Fatal(err)
+				}
+				restored, err := NewAndroidAppClient(*saved.AndroidApp, WithHTTPClient(&http.Client{Transport: transport}))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = restored.RestoreWebmasterRegistrationSession(&saved); err != nil {
+					t.Fatal("failed wire evidence could not restore", err)
+				}
+				if _, err = restored.QueryAndroidInstallReferrer(context.Background()); err == nil || requests != 1 {
+					t.Fatal("unknown attribution outcome was replayed")
+				}
+				if !reflect.DeepEqual(restored.AndroidAttribution().ReferrerReport.RawBody, wantBody) {
+					t.Fatal("session restore changed original wire bytes")
+				}
+				client = restored
+			}
+		})
+	}
+}
+
+func TestAndroidAttributionRawBytesCannotContradictSuccessEnvelope(t *testing.T) {
+	client := attributionFixtureClient(t, shareRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return shareJSONResponse(req, `{"errno":0,"request_id":9007199254740993}`), nil
+	}))
+	if err := client.ReportAndroidInstall(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	saved := client.WebmasterRegistrationSession()
+	for _, body := range []string{`{"errno":9,"request_id":9007199254740993}`, `{"errno":0,"request_id":9007199254740992}`, `<html>invalid</html>`} {
+		copy := *saved
+		copy.AndroidAttribution = cloneAndroidAttribution(saved.AndroidAttribution)
+		copy.AndroidAttribution.InstallReport.RawBody = []byte(body)
+		restored, _ := NewAndroidAppClient(*saved.AndroidApp)
+		if err := restored.RestoreWebmasterRegistrationSession(&copy); err == nil {
+			t.Fatal("wire bytes conflicting with confirmed metadata were accepted")
+		}
+	}
+	// Existing imported sessions did not have raw_body and keep restoring.
+	saved.AndroidAttribution.InstallReport.RawBody = nil
+	restored, _ := NewAndroidAppClient(*saved.AndroidApp)
+	if err := restored.RestoreWebmasterRegistrationSession(saved); err != nil {
+		t.Fatal("legacy attribution session without raw bytes failed", err)
 	}
 }

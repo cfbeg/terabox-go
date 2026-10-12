@@ -1,0 +1,105 @@
+{
+  "provenance": "Actual APK-shipped _a()/Oa() executed offline. Synthetic encryptor implementations test wrapper semantics; they are not TeraBox cryptography.",
+  "asset": "auth_asset_login.409326c5.js",
+  "sha256": "3b66a71d5f411bc3002b5b76e6f1ebcd73f761214eac3d7b0b4eb2f2ac262cab",
+  "source_byte_offset": 27877,
+  "source": "const Sa=8,_a=e=>{if(!window.fsec)return{data:e,isEncrypted:!1};const t=window.fsec.encrypt(e).slice(Sa);return t===e?{data:t,isEncrypted:!1}:{origin:e,data:t,isEncrypted:!0}},Oa=(e,t)=>{if(t.length===0||t.every(i=>!Sn(e,i)))return{dataObj:e,isEncryptedObj:!1};const r={...e};let n=!0;return t.forEach(i=>{const o=Sn(e,i);if(o){const s=_a(String(o));s.isEncrypted||(n=!1),cs(r,i,s.data)}}),n?{dataObj:r,isEncryptedObj:!0}:{dataObj:e,isEncryptedObj:!1}};",
+  "cases": [
+    {
+      "name": "FSEC absent",
+      "encryptor": null,
+      "fields": [
+        "email"
+      ],
+      "input": {
+        "email": "email@example.invalid",
+        "token": "unchanged"
+      },
+      "output": {
+        "email": "email@example.invalid",
+        "token": "unchanged"
+      },
+      "encrypted": false
+    },
+    {
+      "name": "encryptor changed email",
+      "encryptor": "function(e){return 'PREFIX08encrypted:'+e;}",
+      "fields": [
+        "email"
+      ],
+      "input": {
+        "email": "email@example.invalid",
+        "token": "unchanged"
+      },
+      "output": {
+        "email": "encrypted:email@example.invalid",
+        "token": "unchanged"
+      },
+      "encrypted": true
+    },
+    {
+      "name": "truthy mobile unchanged reverts whole form",
+      "encryptor": "function(e){return 'PREFIX08'+(e==='mobile-unchanged'?e:'encrypted:'+e);}",
+      "fields": [
+        "email",
+        "mobile"
+      ],
+      "input": {
+        "email": "email@example.invalid",
+        "mobile": "mobile-unchanged",
+        "pwd": "RSA-password"
+      },
+      "output": {
+        "email": "email@example.invalid",
+        "mobile": "mobile-unchanged",
+        "pwd": "RSA-password"
+      },
+      "encrypted": false
+    },
+    {
+      "name": "empty optional mobile omitted",
+      "encryptor": "function(e){return 'PREFIX08encrypted:'+e;}",
+      "fields": [
+        "email",
+        "mobile"
+      ],
+      "input": {
+        "email": "email@example.invalid",
+        "mobile": ""
+      },
+      "output": {
+        "email": "encrypted:email@example.invalid",
+        "mobile": ""
+      },
+      "encrypted": true
+    },
+    {
+      "name": "unchanged after prefix removed",
+      "encryptor": "function(e){return 'PREFIX08'+e;}",
+      "fields": [
+        "email"
+      ],
+      "input": {
+        "email": "email@example.invalid"
+      },
+      "output": {
+        "email": "email@example.invalid"
+      },
+      "encrypted": false
+    },
+    {
+      "name": "eight UTF16 code unit prefix",
+      "encryptor": "function(e){return '💾💾💾💾encrypted:'+e;}",
+      "fields": [
+        "email"
+      ],
+      "input": {
+        "email": "email@example.invalid"
+      },
+      "output": {
+        "email": "encrypted:email@example.invalid"
+      },
+      "encrypted": true
+    }
+  ]
+}

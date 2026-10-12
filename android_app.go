@@ -43,10 +43,12 @@ type AndroidAppProfile struct {
 }
 
 type androidAppState struct {
-	profile AndroidAppProfile
-	bootMu  sync.Mutex
-	ready   bool
-	now     func() time.Time
+	profile        AndroidAppProfile
+	bootMu         sync.Mutex
+	ready          bool
+	now            func() time.Time
+	hyRuntime      *androidHyRuntime
+	runtimeJSToken string
 }
 
 func copyAndroidAppProfile(profile AndroidAppProfile) AndroidAppProfile {
@@ -258,6 +260,11 @@ func (c *Client) androidH5Headers() map[string]string {
 // androidAppAPIRequest is the native API path. Guest Retrofit requests carry a
 // bare rand; the explicit H5 rand=0 fallback belongs only to the Hy builder.
 func (c *Client) androidAppAPIRequest(req *http.Request) (*http.Request, error) {
+	return c.androidAppAPIRequestWithTransport(req, false)
+}
+
+func (c *Client) androidAppAPIRequestWithTransport(req *http.Request, forceLegacy bool) (*http.Request, error) {
+	c.initializeAndroidAttributionMediaCache()
 	profile := c.AndroidAppProfile()
 	if profile == nil {
 		return nil, errors.New("Android app profile is required for API requests")
@@ -271,7 +278,7 @@ func (c *Client) androidAppAPIRequest(req *http.Request) (*http.Request, error) 
 	query.Del("jsToken")
 	query.Del("bdstoken")
 	query.Del("rand")
-	legacy := clone.URL.Path == "/api/shorturlinfo" || clone.URL.Path == "/api/report/user" || clone.URL.Path == "/api/account/uinfo"
+	legacy := forceLegacy || clone.URL.Path == "/api/shorturlinfo" || clone.URL.Path == "/api/report/user" || clone.URL.Path == "/api/account/uinfo"
 	params := profile.NativeParams
 	if legacy {
 		params = profile.LegacyNativeParams
@@ -280,6 +287,12 @@ func (c *Client) androidAppAPIRequest(req *http.Request) (*http.Request, error) 
 		query.Del("app_name")
 	}
 	for key, value := range params {
+		if key == "web" || key == "jsToken" || key == "bdstoken" || key == "rand" {
+			continue
+		}
+		if androidNativeEndpointOwnedField(clone.URL.Path, key) {
+			continue
+		}
 		if (clone.URL.Path == "/api/srn/ins" || clone.URL.Path == "/api/srn/ref") && androidAttributionEndpointField(key) {
 			// Retrofit endpoint @Query observations take precedence over cached
 			// common state. An absent nullable query must also remain absent.
@@ -288,7 +301,7 @@ func (c *Client) androidAppAPIRequest(req *http.Request) (*http.Request, error) 
 		query.Set(key, value)
 	}
 	query.Del("rand")
-	if legacy && clone.URL.Path != "/api/account/uinfo" {
+	if legacy && clone.Method == http.MethodGet {
 		if cookie, err := clone.Cookie("ndus"); err == nil && cookie.Value != "" {
 			query.Set("bdstoken", fmt.Sprintf("%x", md5.Sum([]byte(cookie.Value))))
 		}
@@ -317,7 +330,9 @@ func (c *Client) androidAppAPIRequest(req *http.Request) (*http.Request, error) 
 	clone.Header.Del("X-Requested-With")
 	clone.Header.Del("Accept")
 	clone.Header.Set("Referer", "https://terabox.com/")
-	clone.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if !strings.HasPrefix(clone.Header.Get("Content-Type"), "application/json") {
+		clone.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
 	clone.Header.Set("User-Agent", profile.UserAgent)
 	if profile.EncodedSK != "" {
 		signer, err := c.androidAppSigner(*profile)
@@ -342,6 +357,28 @@ func (c *Client) androidAppAPIRequest(req *http.Request) (*http.Request, error) 
 		clone.URL.RawQuery += "&rand"
 	}
 	return clone, nil
+}
+
+// Endpoint fields originate in a real call or observation; cached common
+// parameters must not replace them or invent omitted optional values.
+func androidNativeEndpointOwnedField(endpoint, key string) bool {
+	switch endpoint {
+	case "/api/report/user":
+		return key == "action" || key == "channel_id" || key == "bind_uid" || key == "needrookie" || key == "fcm_token" || key == "source" || key == "msg_id" || key == "start_source" || key == "push_on" || key == "backup_on " || key == "timestamp"
+	case "/api/activity/invite/v1/reportinvite":
+		return key == "code"
+	case "/newmain/reporter/userattribute":
+		return key == "ad_material_source" || key == "na_material_source" || key == "fb_material_source"
+	case "/share/transfer":
+		return key == "from" || key == "shareid" || key == "sekey" || key == "bot_uk" || key == "wm_token"
+	case "/api/shorturlinfo", "/share/list":
+		return key == "shorturl" || key == "root" || key == "type" || key == "page" || key == "num" || key == "dir" || key == "timestamp" || key == "scene" || key == "bot_uk"
+	case "/api/list":
+		return key == "dir" || key == "start" || key == "limit" || key == "order" || key == "secret_token" || key == "desc" || key == "preset" || key == "recursion" || key == "category"
+	case "/api/taskquery":
+		return key == "taskid"
+	}
+	return false
 }
 
 func refreshAndroidLogID(captured string, timestamp int64) (string, error) {
@@ -486,19 +523,25 @@ func (c *Client) loadAndroidHyPage(ctx context.Context) error {
 		if readErr != nil {
 			return readErr
 		}
-		if androidFSEC.Match(page) {
-			return errors.New("Android Hy page requires fsec email encryption; capture its encryptor before sending email")
+		pending = append(pending, response.Cookies()...)
+		visible := make(map[string]string)
+		for _, cookie := range pending {
+			if !cookie.HttpOnly {
+				mergeCookieValues(visible, []*http.Cookie{cookie})
+			}
 		}
-		data, err := androidHyBootstrap(string(page))
+		runtimeProfile := copyAndroidAppProfile(*profile)
+		runtimeProfile.PageURL = target.String()
+		data, runtime, err := resolveAndroidHyBootstrap(ctx, string(page), runtimeProfile, serializeCookies(visible), c.fetchAndroidHyAsset)
 		if err != nil {
 			return err
 		}
-		pending = append(pending, response.Cookies()...)
 		c.mu.Lock()
 		mergeCookieValues(c.cookies, pending)
 		c.whost = urlOrigin(target)
 		c.data.pcfToken, c.data.jsToken = data.PcfToken, data.JsToken
 		c.androidApp.profile.PageURL = target.String()
+		c.androidApp.hyRuntime, c.androidApp.runtimeJSToken = runtime, data.JsToken
 		c.androidApp.ready = true
 		c.mu.Unlock()
 		return nil
@@ -515,16 +558,36 @@ func (c *Client) doPassportJSON(ctx context.Context, op string, options *request
 	}
 	copy := *options
 	copy.query, copy.headers, copy.noCookie = query, c.androidH5Headers(), false
+	for key, value := range options.headers {
+		copy.headers[key] = value
+	}
 	if options.form != nil {
 		copy.form = &formValues{keys: append([]string(nil), options.form.keys...), values: append([]string(nil), options.form.values...)}
 		common := c.androidH5Form()
 		for i, key := range common.keys {
 			copy.form.Set(key, common.values[i])
 		}
+		c.androidChallengeForm(copy.path, copy.form)
+		c.mu.RLock()
+		runtime := c.androidApp.hyRuntime
+		c.mu.RUnlock()
+		if runtime != nil {
+			form, encrypted, err := runtime.encryptForm(ctx, copy.path, copy.form)
+			if err != nil {
+				return wrapErr(op, err)
+			}
+			copy.form = form
+			if encrypted {
+				copy.headers["fs-ex-st"] = "1"
+			}
+		}
 	}
 	if copy.method == http.MethodGet {
 		copy.query.Set("psign", c.AndroidAppProfile().PSign)
 	}
+	c.mu.Lock()
+	c.data.passportPath = copy.path
+	c.mu.Unlock()
 	return c.doJSON(ctx, op, &copy, out)
 }
 

@@ -16,7 +16,7 @@ millisecond time, PCF, psign, and Android passport forms.
 
 | Operation | APK request |
 | --- | --- |
-| Hy sendcode | POST `/passport/register_v4/sendcode`, email, op_type=1, choose_email, g_identity; shared-entry source=share in form |
+| Hy sendcode | POST `/passport/register_v4/sendcode`, email, op_type=1, choose_email, g_identity; shared-entry reg_source=share in form |
 | Hy verify | POST `/passport/register_v4/verify`, token, code, skip_code=0, support_unify=1, g_identity |
 | Hy finish | POST `/passport/register_v4/finish`, token, RSA pwd, g_identity, access_token |
 | Native psign bootstrap | POST `/passport/getpubkey`, client=android/pass_version=2.0/devuid/psign; response pp3 |
@@ -25,7 +25,9 @@ millisecond time, PCF, psign, and Android passport forms.
 
 The Hy email API sends plaintext email when `window.fsec` is absent. When it
 exists, the APK uses `fsec.encrypt(value).slice(8)` and `fs-ex-st:1`.
-An initializing fsec page is rejected until that runtime encryptor is known.
+The SDK evaluates supported dynamic bootstrap/FSEC sources in a bounded Go
+runtime. Unsupported actual browser dependencies stop the request; FSEC-active
+registration remains unobserved in live tests. See [runtime conditions](ANDROID_APP.md).
 PCF comes from the actual Hy page's `templateData` or `__INITIAL_STATE__`.
 
 Hy login `loginInfoEncrypt` is dispatched by `Lww/b0.______` at `0xc0c918`
@@ -43,13 +45,19 @@ UK and account-check UK are not native UID sources.
 | --- | --- |
 | Old native shorturlinfo | GET `/api/shorturlinfo`, type=0, root=1, shorturl=1+normalizedKey, bot_uk |
 | Native root list | GET `/share/list`, normalized shorturl, zero-based page, num=100, root=1, dir, timestamp(seconds), scene, bot_uk |
-| Native transfer | POST `/share/transfer`; query shareid/from/bot_uk; form path/async/fsidlist/ondup/native CK FieldMap |
+| Retrofit transfer | POST `/share/transfer`; query shareid/from/bot_uk; form path/async/fsidlist/ondup/native CK FieldMap |
+| Ordinary share-detail transfer | Same endpoint via legacy native transport, JSON string-ID array and POST NDUS hash |
+| Received-link report | POST `/rest/receive/report`, JSON list with optype=4, scene=2, actual chain key, origin=0 |
+| Transfer task query | POST `/api/taskquery?taskid=...`, filelist=[{}] plus POST NDUS hash |
+| Destination listing | Legacy native GET `/api/list`, authenticated NDUS |
 
 Shorturlinfo evidence: `classes13.dex L l30/_.h`, `0xdc9498`.
 Retrofit list/transfer annotation evidence: `IApi.k/m`, `0x5483aa`, and
 `IApi.d`, `0x52f341`. Initial root-list caller
 `MultiShareListViewModel.y`, `0xc2fa7c`, uses page 0, num 100, root 1,
-empty dir/scene. Transfers use Java `List.toString()` serialization for FSIDs.
+empty dir/scene. Retrofit transfers use Java `List.toString()` serialization
+for FSIDs. The ordinary shared screen uses `ln.__.B` and a string JSON array;
+its callback/task and listing evidence are in [shared-screen operations](ANDROID_SHARE_NATIVE.md).
 
 Native UA and request headers come from the app. Native metadata/transfer
 do not request a browser main page or depend on its JavaScript token.
