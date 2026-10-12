@@ -159,6 +159,11 @@
         "ab_variant_e": [
           ""
         ]
+      },
+      "headers": {
+        "Cookie": [
+          ""
+        ]
       }
     },
     {
@@ -273,6 +278,11 @@
           ""
         ],
         "ab_variant_e": [
+          ""
+        ]
+      },
+      "headers": {
+        "Cookie": [
           ""
         ]
       }

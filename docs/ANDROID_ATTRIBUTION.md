@@ -66,6 +66,11 @@ sanitized `testdata/android_play_attribution_wire.json` fixture retains all
 captured query names and their multiplicity, with private identifiers and
 referrer contents replaced by test values.
 
+Both observed guest `/ins` and `/ref` requests also contain an explicit empty
+`Cookie` header. The SDK supplies that empty header for these two native
+endpoints when no cookie values exist, and preserves existing account cookie
+values. This observation is not extrapolated to other endpoints.
+
 Common inputs must describe the request's observation time. In this capture,
 both initial requests have an empty `ab_variant_b`, while the later standalone
 common-parameter observation has `ab_variant_b=0`. Replaying an initial request

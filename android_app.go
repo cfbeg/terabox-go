@@ -339,6 +339,11 @@ func (c *Client) androidAppAPIRequestWithTransport(req *http.Request, forceLegac
 		clone.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
 	clone.Header.Set("User-Agent", profile.UserAgent)
+	if (clone.URL.Path == "/api/srn/ins" || clone.URL.Path == "/api/srn/ref") && len(clone.Header.Values("Cookie")) == 0 {
+		// These observed guest Retrofit requests include an empty Cookie
+		// header. Preserve an existing session header without replacing it.
+		clone.Header.Set("Cookie", "")
+	}
 	if profile.EncodedSK != "" {
 		signer, err := c.androidAppSigner(*profile)
 		if err != nil {

@@ -30,6 +30,7 @@ func TestAndroidPlayAttributionObservedNativeWire(t *testing.T) {
 		Requests        []struct {
 			Path, Method, Body string
 			Query              url.Values
+			Headers            http.Header
 		}
 	}
 	if err := json.Unmarshal(data, &fixture); err != nil {
@@ -60,6 +61,9 @@ func TestAndroidPlayAttributionObservedNativeWire(t *testing.T) {
 			req.Header.Get("Referer") != "https://terabox.com/" || req.UserAgent() != profile.UserAgent ||
 			req.Header.Get("X-Requested-With") != "" || req.Header.Get("Accept") != "" {
 			t.Error("request method/body/headers differ from the observed native transport")
+		}
+		if !reflect.DeepEqual(req.Header.Values("Cookie"), want.Headers.Values("Cookie")) || len(want.Headers.Values("Cookie")) != 1 {
+			t.Error("native attribution omitted the observed explicit empty guest Cookie header")
 		}
 		got := req.URL.Query()
 		// The native logid's random suffix changes per request. Check its actual
@@ -113,6 +117,62 @@ func TestAndroidPlayAttributionObservedNativeWire(t *testing.T) {
 	}
 	if seen != 2 || !reflect.DeepEqual(client.AndroidAppProfile().NativeParams, fixture.NativeParams) {
 		t.Fatal("native reporting missed a captured request or mutated the captured common inputs")
+	}
+}
+
+func TestAndroidAttributionCookieHeaderPreservesObservedGuestAndAccountValues(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		input, want   []string
+		authenticated bool
+	}{
+		{"guest_unset", nil, []string{""}, false},
+		{"guest_explicit_empty", []string{""}, []string{""}, false},
+		{"account", []string{"ndus=fixture-session; locale=ja"}, []string{"ndus=fixture-session; locale=ja"}, true},
+		{"account_multiple_headers", []string{"ndus=fixture-session", "locale=ja"}, []string{"ndus=fixture-session", "locale=ja"}, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			profile := androidFixtureProfile()
+			if test.authenticated {
+				signing := androidSignatureConfig()
+				profile.UID, profile.EncodedSK = signing.UID, signing.EncodedSK
+			}
+			client, err := NewAndroidAppClient(profile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, path := range []string{"/api/srn/ins", "/api/srn/ref"} {
+				request, _ := http.NewRequest(http.MethodPost, "https://terabox.com"+path, nil)
+				if test.input != nil {
+					request.Header["Cookie"] = append([]string(nil), test.input...)
+				}
+				original := request.Header.Clone()
+				sent, err := client.androidAppAPIRequest(request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(sent.Header.Values("Cookie"), test.want) || !reflect.DeepEqual(request.Header, original) {
+					t.Fatal("native attribution lost a Cookie value or mutated the endpoint request")
+				}
+				if test.authenticated {
+					cookie, err := sent.Cookie("ndus")
+					if err != nil || cookie.Value != "fixture-session" || len(sent.URL.Query().Get("rand")) != 40 {
+						t.Fatal("authenticated attribution lost its native session or signer")
+					}
+				}
+			}
+		})
+	}
+	client, err := NewAndroidAppClient(androidFixtureProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/api/account/uinfo", "/api/shorturlinfo", "/share/list"} {
+		request, _ := http.NewRequest(http.MethodPost, "https://terabox.com"+path, nil)
+		sent, err := client.androidAppAPIRequest(request)
+		if err != nil || len(sent.Header.Values("Cookie")) != 0 {
+			t.Fatal("unobserved endpoints inherited the attribution-only guest Cookie header")
+		}
 	}
 }
 
