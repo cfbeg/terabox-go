@@ -278,6 +278,9 @@ func (c *Client) RestoreWebmasterRegistrationSession(saved *WebmasterRegistratio
 	if err := validateAndroidAttributionState(saved.AndroidAttribution, restored.androidApp.profile); err != nil {
 		return wrapErr(op, err)
 	}
+	if err := validateAndroidShareEntrySession(saved.AndroidAttribution, saved.NDUS); err != nil {
+		return wrapErr(op, err)
+	}
 	c.registrationMu.Lock()
 	defer c.registrationMu.Unlock()
 	c.attributionMu.Lock()

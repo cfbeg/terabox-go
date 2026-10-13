@@ -29,6 +29,7 @@ func NewAndroidGuestProfile(template AndroidAppProfile) (AndroidAppProfile, erro
 	// valid for the new installation. Validate all retained build/request fields.
 	template.UID, template.EncodedSK, template.PSign = "", "", ""
 	template.CKData, template.NativeCKData = nil, nil
+	template.Activation = nil
 	captured, err := validateAndroidAppProfile(template)
 	if err != nil {
 		return AndroidAppProfile{}, wrapErr(op, err)
@@ -115,6 +116,7 @@ func newAndroidGuestProfile(template *AndroidAppProfile) (*AndroidAppProfile, er
 	// them and resolves its own psign/PCF/cookies and post-login UID/SK.
 	profile.UID, profile.EncodedSK, profile.PSign = "", "", ""
 	profile.CKData, profile.NativeCKData = nil, nil
+	profile.Activation = nil
 	profile.NativeParams, err = freshAndroidParams(template.NativeParams, &profile, now)
 	if err != nil {
 		return nil, err

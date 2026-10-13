@@ -129,6 +129,7 @@ type AndroidAttributionState struct {
 	AfCampaign            *string                           `json:"af_campaign,omitempty"`
 	DeepLinkValue         *string                           `json:"deep_link_value,omitempty"`
 	PostLogin             *AndroidPostLoginAttributionState `json:"post_login,omitempty"`
+	ShareEntry            *AndroidShareEntryState           `json:"share_entry,omitempty"`
 }
 
 func cloneAndroidAttribution(state *AndroidAttributionState) *AndroidAttributionState {
@@ -398,6 +399,9 @@ func validateAndroidAttributionState(state *AndroidAttributionState, profile And
 		}
 	}
 	if err := validateAndroidPostLoginAttribution(state, profile); err != nil {
+		return err
+	}
+	if err := validateAndroidShareEntry(state, profile); err != nil {
 		return err
 	}
 	if state.WebmasterUK != nil {

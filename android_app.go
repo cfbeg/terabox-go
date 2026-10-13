@@ -24,27 +24,29 @@ import (
 // app. UID and EncodedSK may be empty for a guest. Channel is the Hy page's
 // channel, whereas NativeChannel is used by the app's native API transport.
 type AndroidAppProfile struct {
-	DeviceID           string            `json:"device_id"`
-	Version            string            `json:"version"`
-	UserAgent          string            `json:"user_agent"`
-	NativeChannel      string            `json:"native_channel"`
-	Channel            string            `json:"channel"`
-	Language           string            `json:"language"`
-	PageURL            string            `json:"page_url"`
-	UID                string            `json:"uid,omitempty"`
-	EncodedSK          string            `json:"encoded_sk,omitempty"`
-	PSign              string            `json:"psign,omitempty"`
-	CKData             map[string]string `json:"ck_data,omitempty"`
-	NativeParams       map[string]string `json:"native_params,omitempty"`
-	LegacyNativeParams map[string]string `json:"legacy_native_params,omitempty"`
-	NativeCKData       map[string]string `json:"native_ck_data,omitempty"`
-	ReportParams       map[string]string `json:"report_params,omitempty"`
-	ClientType         int               `json:"client_type"`
+	DeviceID           string                  `json:"device_id"`
+	Version            string                  `json:"version"`
+	UserAgent          string                  `json:"user_agent"`
+	NativeChannel      string                  `json:"native_channel"`
+	Channel            string                  `json:"channel"`
+	Language           string                  `json:"language"`
+	PageURL            string                  `json:"page_url"`
+	UID                string                  `json:"uid,omitempty"`
+	EncodedSK          string                  `json:"encoded_sk,omitempty"`
+	PSign              string                  `json:"psign,omitempty"`
+	CKData             map[string]string       `json:"ck_data,omitempty"`
+	NativeParams       map[string]string       `json:"native_params,omitempty"`
+	LegacyNativeParams map[string]string       `json:"legacy_native_params,omitempty"`
+	NativeCKData       map[string]string       `json:"native_ck_data,omitempty"`
+	ReportParams       map[string]string       `json:"report_params,omitempty"`
+	Activation         *AndroidActivationState `json:"activation,omitempty"`
+	ClientType         int                     `json:"client_type"`
 }
 
 type androidAppState struct {
 	profile        AndroidAppProfile
 	bootMu         sync.Mutex
+	activationMu   sync.Mutex
 	ready          bool
 	now            func() time.Time
 	hyRuntime      *androidHyRuntime
@@ -69,6 +71,7 @@ func copyAndroidAppProfile(profile AndroidAppProfile) AndroidAppProfile {
 	profile.LegacyNativeParams = copyAndroidStringMap(profile.LegacyNativeParams)
 	profile.NativeCKData = copyAndroidStringMap(profile.NativeCKData)
 	profile.ReportParams = copyAndroidStringMap(profile.ReportParams)
+	profile.Activation = cloneAndroidActivation(profile.Activation)
 	return profile
 }
 
@@ -143,6 +146,9 @@ func validateAndroidAppProfile(profile AndroidAppProfile) (AndroidAppProfile, er
 		if !allowedReport[key] || !utf8.ValidString(value) || strings.ContainsAny(value, "\r\n\x00") {
 			return profile, errors.New("Android app ReportParams contains an invalid runtime field")
 		}
+	}
+	if err := validateAndroidActivation(profile.Activation, profile.UID); err != nil {
+		return profile, err
 	}
 	return copyAndroidAppProfile(profile), nil
 }
@@ -663,58 +669,6 @@ func androidFinishIdentity(response *PassportResponse, cookieNDUS string) (strin
 // request. Persist the successful registration first. Refresh failures leave
 // the native account and its existing configuration intact.
 func (c *Client) RefreshAndroidAppConfig(ctx context.Context) error {
-	const op = "refreshAndroidAppConfig"
-	profile := c.AndroidAppProfile()
-	ndus, _ := c.CookieValue("ndus")
-	if profile == nil || profile.UID == "" || ndus == "" {
-		return wrapErr(op, errors.New("own authenticated Android UID and ndus are required"))
-	}
-	if len(profile.ReportParams) == 0 || profile.ReportParams["action"] != "ANDROID_ACTIVE_FRONTDESK" ||
-		profile.ReportParams["start_source"] == "" || profile.ReportParams["push_on"] == "" || profile.ReportParams["backup_on "] == "" {
-		return wrapErr(op, errors.New("captured foreground ReportParams are required for Android configuration refresh"))
-	}
-	query := url.Values{}
-	for key, value := range profile.ReportParams {
-		query.Set(key, value)
-	}
-	query.Set("timestamp", strconv.FormatInt(c.androidAppTime(), 10))
-	var response struct {
-		Errno *int   `json:"errno"`
-		Code  *int   `json:"code"`
-		Msg   string `json:"errmsg"`
-		Alias string `json:"error_msg"`
-		UInfo string `json:"uinfo"`
-	}
-	if err := c.doJSON(ctx, op, &requestOpts{method: http.MethodGet,
-		path: "/api/report/user", query: query}, &response); err != nil {
-		return err
-	}
-	code := 0
-	if response.Code != nil && *response.Code != 0 {
-		code = *response.Code
-	} else if response.Errno == nil {
-		return wrapErr(op, errors.New("Android configuration response is missing errno"))
-	} else {
-		code = *response.Errno
-	}
-	if code != 0 {
-		message := response.Msg
-		if message == "" {
-			message = response.Alias
-		}
-		return wrapErr(op, &APIError{Code: code, Message: message})
-	}
-	if response.UInfo == "" {
-		return wrapErr(op, errors.New("Android configuration response is missing uinfo"))
-	}
-	if _, err := DecodeAndroidSK(profile.UID, response.UInfo); err != nil {
-		return wrapErr(op, err)
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.cookies["ndus"] != ndus || c.androidApp.profile.UID != profile.UID {
-		return wrapErr(op, errors.New("Android account changed during configuration refresh"))
-	}
-	c.androidApp.profile.EncodedSK = response.UInfo
-	return nil
+	_, err := c.sendAndroidAppActivation(ctx, nil, true)
+	return err
 }
