@@ -303,7 +303,8 @@ func (c *Client) RegisterSendCode(ctx context.Context, email string) (*PassportR
 	return &resp, nil
 }
 
-// RegisterVerify verifies the registration code sent by email.
+// RegisterVerify verifies the four ASCII digits sent by email. Leading zeros
+// are preserved, and invalid codes are rejected before any HTTP request.
 // Code semantics: 0 OK, 58/59 wrong email code (58 observed live).
 func (c *Client) RegisterVerify(ctx context.Context, regToken, code string) (*PassportResponse, error) {
 	const op = "regVerify"
@@ -311,6 +312,14 @@ func (c *Client) RegisterVerify(ctx context.Context, regToken, code string) (*Pa
 	defer c.registrationMu.Unlock()
 	if err := c.validateReferralRegistrationToken(regToken); err != nil {
 		return nil, wrapErr(op, err)
+	}
+	if len(code) != 4 {
+		return nil, wrapErr(op, fmt.Errorf("registration verification code must contain exactly 4 ASCII digits"))
+	}
+	for i := 0; i < len(code); i++ {
+		if code[i] < '0' || code[i] > '9' {
+			return nil, wrapErr(op, fmt.Errorf("registration verification code must contain exactly 4 ASCII digits"))
+		}
 	}
 
 	form := c.androidH5Form()

@@ -89,8 +89,13 @@ the APK fallback `dubox`. Hy RSA public-key retrieval is POST with version
 the AES-decoded pp1/pp2 public key. The actual UI policy requires 8–20 printable
 ASCII characters (`!` through `~`) including all three kinds: letters, digits,
 and symbols. Uppercase/lowercase letters belong to one kind. Spaces, controls,
-and non-ASCII characters fail the UI policy. The verification screen uses four
-digits.
+and non-ASCII characters fail the UI policy.
+
+`RegisterVerify` requires exactly four ASCII decimal digits (`0` through `9`)
+in its `code` argument. Codes remain strings, so `"0007"` preserves its leading
+zeros. Invalid lengths, nonnumeric characters, whitespace, and non-ASCII digits
+are rejected before any HTTP request. Verification uses the normal `skip_code=0`
+branch.
 
 Hy password login uses the native `loginInfoEncrypt` bridge. Dispatcher
 `Lww/b0.______` calls `e0` at `0xc0c918`; `e0` (`0xc0b3e8`) returns MD5 hex of

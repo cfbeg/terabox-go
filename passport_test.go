@@ -11,8 +11,88 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 )
+
+func TestRegisterVerifyRejectsInvalidCodeBeforeBootstrap(t *testing.T) {
+	for _, test := range []struct {
+		name, code string
+	}{
+		{"empty", ""},
+		{"short", "123"},
+		{"long", "12345"},
+		{"six digits", "123456"},
+		{"letter", "12a4"},
+		{"sign", "-123"},
+		{"decimal", "1.23"},
+		{"leading space", " 1234"},
+		{"trailing space", "1234 "},
+		{"newline", "123\n"},
+		{"fullwidth digits", "１２３４"},
+		{"Arabic-Indic digits", "١٢٣٤"},
+		{"mixed unicode digit", "123４"},
+		{"NUL", "1\x0034"},
+		{"invalid UTF-8", "\xff234"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			client, err := NewAndroidAppClient(androidFixtureProfile(), WithHTTPClient(&http.Client{
+				Transport: shareRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+					calls++
+					return nil, errors.New("invalid code must not bootstrap or send verification")
+				}),
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			client.registrationToken = "fixture-token"
+			page := client.AndroidAppProfile().PageURL
+			response, err := client.RegisterVerify(context.Background(), "fixture-token", test.code)
+			var wrapped *Error
+			if response != nil || !errors.As(err, &wrapped) || wrapped.Op != "regVerify" ||
+				!strings.Contains(err.Error(), "exactly 4 ASCII digits") || calls != 0 {
+				t.Fatalf("response=%v error=%v requests=%d", response, err, calls)
+			}
+			if client.androidApp.ready || client.registrationToken != "fixture-token" ||
+				client.AndroidAppProfile().PageURL != page || client.CookieString() != "" {
+				t.Fatal("invalid OTP changed registration state")
+			}
+		})
+	}
+}
+
+func TestRegisterVerifyPreservesFourDigitCodeOnNormalWire(t *testing.T) {
+	for _, code := range []string{"0000", "0007", "0123", "1234", "9999"} {
+		t.Run(code, func(t *testing.T) {
+			calls := 0
+			client, err := NewAndroidAppClient(androidFixtureProfile(), WithHTTPClient(&http.Client{
+				Transport: shareRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+					calls++
+					if request.Method != http.MethodPost || request.URL.Path != "/passport/register_v4/verify" {
+						t.Fatalf("unexpected request: %s %s", request.Method, request.URL.Path)
+					}
+					if err := request.ParseForm(); err != nil {
+						t.Fatal(err)
+					}
+					if request.PostForm.Get("code") != code || request.PostForm.Get("skip_code") != "0" ||
+						request.PostForm.Get("token") != "fixture-token" || request.PostForm.Get("g_identity") != "" {
+						t.Fatal("verification changed the OTP or normal APK form")
+					}
+					return shareJSONResponse(request, `{"code":0,"data":null}`), nil
+				}),
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			client.androidApp.ready, client.data.pcfToken, client.registrationToken = true, "fixture-pcf", "fixture-token"
+			response, err := client.RegisterVerify(context.Background(), "fixture-token", code)
+			if err != nil || response == nil || response.Code != 0 || calls != 1 {
+				t.Fatalf("response=%v error=%v requests=%d", response, err, calls)
+			}
+		})
+	}
+}
 
 func TestPassportLoginRejectsInvalidPreLoginBeforeRequest(t *testing.T) {
 	for _, pre := range []*PreLoginResponse{nil, {Code: 10, Msg: "invalid email"}} {
