@@ -58,6 +58,7 @@ type Client struct {
 	registrationConfirmed bool
 	registrationFinished  bool
 	androidApp            *androidAppState
+	requestObserver       *requestObservationState
 }
 
 type Option func(*Client)
@@ -100,9 +101,17 @@ func WithCookies(serialized string) Option {
 func newClient(opts ...Option) *Client {
 	c := &Client{httpClient: &http.Client{
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
-	}, timeout: defaultTimeout, cookies: make(map[string]string), whost: "https://www." + TeraBoxDomain}
+	}, timeout: defaultTimeout, cookies: make(map[string]string), whost: "https://www." + TeraBoxDomain,
+		requestObserver: &requestObservationState{prefix: fmt.Sprintf("%x", time.Now().UnixNano())}}
 	for _, opt := range opts {
 		opt(c)
+	}
+	if c.requestObserver != nil {
+		base := c.httpClient.Transport
+		if base == nil {
+			base = http.DefaultTransport
+		}
+		c.httpClient.Transport = &observedTransport{base: base, state: c.requestObserver}
 	}
 	c.trustedOrigins = make(map[string]struct{})
 	if origin, err := url.Parse(c.whost); err == nil && origin.Host != "" {
@@ -266,6 +275,7 @@ func apkRequestPath(path string) bool {
 		"/rest/receive/report", "/api/taskquery", "/api/list",
 		"/api/activity/invite/v1/reportinvite", "/newmain/reporter/userattribute",
 		"/api/srn/ck", "/api/srn/ins", "/api/srn/ref",
+		"/statistics", "/api/analytics", "/api/report/device",
 		"/rest/1.0/imact/miner/pull", "/rest/1.0/imact/miner/start", "/rest/1.0/imact/miner/getitem",
 		"/rest/1.0/imact/miner/finishgame", "/rest/1.0/inte/system/getrecord",
 		"/rest/1.0/imact/miner/queryvideo", "/rest/1.0/imact/puzzle/query",
@@ -315,6 +325,7 @@ func (c *Client) doJSON(ctx context.Context, op string, options *requestOpts, ou
 	if err != nil {
 		return wrapErr(op, err)
 	}
+	req = withObservedAPIRoute(req, op, options.legacyNative)
 	timeout := options.timeout
 	if timeout == 0 {
 		timeout = c.timeout

@@ -155,6 +155,14 @@ The [Gold Miner request contract](docs/APK_GOLDMINER.md) and
 
 ## HTTP and verification
 
+Optional [request observations and telemetry](docs/ANDROID_TELEMETRY.md) provide
+redacted before/after transport records, captured statistics batch upload and
+an actual AppsFlyer/Firebase runtime bridge with durable attempt state.
+The [Android installation collector](docs/ANDROID_RUNTIME_CAPTURE.md) and
+[browser click observer](docs/ANDROID_BROWSER_CAPTURE.md) retain observed
+inputs and their provenance. The [4.26.5 referral audit](docs/APK_REFERRAL_AUDIT_JA.md)
+documents the paths and the distinction between API responses and acquisition.
+
 Result codes must be checked even when a Go error is nil. Prerequisite failures
 retain their `APIError.Code`. Caller deadlines and per-request timeouts use the
 earlier deadline. API origins are validated before sending credentials;
