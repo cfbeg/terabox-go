@@ -256,7 +256,14 @@ func TestExecutableAnalyticsProtocol(t *testing.T) {
 	for _, mode := range []string{"success", "wrong", "large", "timeout"} {
 		t.Run(mode, func(t *testing.T) {
 			t.Setenv("TERABOX_ANALYTICS_MODE", mode)
-			bridge := ExecutableAndroidAnalyticsBridge{Command: executable, Args: []string{"-test.run=^TestAnalyticsExecutableFixture$"}, Timeout: time.Second}
+			// The race runtime waits at process exit to finish its reports.
+			// Keep normal protocol cases above that delay and retain the
+			// short deadline for the deliberately sleeping timeout fixture.
+			deadline := 5 * time.Second
+			if mode == "timeout" {
+				deadline = time.Second
+			}
+			bridge := ExecutableAndroidAnalyticsBridge{Command: executable, Args: []string{"-test.run=^TestAnalyticsExecutableFixture$"}, Timeout: deadline}
 			receipt, err := bridge.ExecuteAndroidAnalytics(context.Background(), dispatch.Request)
 			if mode == "success" && (err != nil || receipt == nil) || mode != "success" && err == nil {
 				t.Fatal("incorrect subprocess evidence handling", err)
